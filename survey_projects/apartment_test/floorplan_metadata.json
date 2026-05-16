@@ -1,0 +1,13 @@
+{
+  "image_width_px": 800,
+  "image_height_px": 1000,
+  "units": "feet",
+  "scale_pixels_per_foot": null,
+  "origin": {
+    "x": 0,
+    "y": 0
+  },
+  "source": "test",
+  "notes": "test",
+  "created_at": "2025-01-01T00:00:00Z"
+}

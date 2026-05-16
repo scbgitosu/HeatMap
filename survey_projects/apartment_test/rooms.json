@@ -1,0 +1,50 @@
+[
+  {
+    "room_id": "living",
+    "room_name": "Living Room",
+    "polygon": [
+      [
+        10,
+        10
+      ],
+      [
+        790,
+        10
+      ],
+      [
+        790,
+        590
+      ],
+      [
+        10,
+        590
+      ]
+    ],
+    "label_x": 400,
+    "label_y": 300
+  },
+  {
+    "room_id": "bedroom",
+    "room_name": "Bedroom",
+    "polygon": [
+      [
+        10,
+        610
+      ],
+      [
+        490,
+        610
+      ],
+      [
+        490,
+        990
+      ],
+      [
+        10,
+        990
+      ]
+    ],
+    "label_x": 250,
+    "label_y": 800
+  }
+]

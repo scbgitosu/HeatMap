@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# Streamlit
+.streamlit/
+
+# Survey data (keep structure, ignore actual data files)
+survey_projects/**/*.csv
+survey_projects/**/*.png
+!survey_projects/**/floorplan.png
+
+# Generated outputs
+output/heatmaps/*.png
+output/reports/*.pdf
+output/exports/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Floorplan raw files (large images — not tracked)
+floorplans/raw/*
+!floorplans/raw/.gitkeep
+floorplans/processed/*
+!floorplans/processed/.gitkeep
+
+# 3D scan files
+scans/raw/*
+!scans/raw/.gitkeep
+scans/processed/*
+!scans/processed/.gitkeep

@@ -1,0 +1,10 @@
+[
+  {
+    "router_position_id": "pos1",
+    "name": "Current Router",
+    "x_px": 400,
+    "y_px": 300,
+    "height_ft": 3.0,
+    "notes": ""
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "project_name": "Apartment Test",
+  "target_ssid": "Nighthawk-Survey",
+  "target_bssid": "",
+  "default_interface": "wlan0",
+  "units": "feet",
+  "collection_mode": "click_to_scan",
+  "paths": {}
+}
