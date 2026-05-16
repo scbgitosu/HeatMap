@@ -8,11 +8,46 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def _autodetect_qt_platform() -> Optional[str]:
+    """Pick a Qt platform plugin matching the current display server.
+
+    Mirrors scripts/run_collector.sh so running the module directly still works.
+    Returns None if no graphical session is detectable.
+    """
+    wayland_display = os.environ.get("WAYLAND_DISPLAY")
+    if wayland_display:
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        sock = Path(runtime_dir) / wayland_display
+        if sock.exists():
+            return "wayland"
+    if os.environ.get("DISPLAY"):
+        return "xcb"
+    return None
+
+
+_QT_HELP_MSG = """
+Qt could not initialise a platform plugin. On Ubuntu this usually means
+the runtime libs are missing or you are running outside a graphical session.
+
+Try the seamless launcher (auto-picks wayland/xcb and falls back):
+
+    ./scripts/run_collector.sh --project survey_projects/apartment_test
+
+If it still fails, install the required system packages:
+
+    sudo apt install network-manager iw \\
+        qtwayland5 libxcb-cursor0 libxkbcommon-x11-0 libxcb-xinerama0
+
+For a verbose diagnostic, re-run with QT_DEBUG_PLUGINS=1.
+"""
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPointF, QRectF
 from PyQt5.QtGui import (
@@ -458,7 +493,26 @@ def main():
     parser.add_argument("--project", required=True, help="Path to project directory")
     args = parser.parse_args()
 
-    app = QApplication(sys.argv)
+    if not os.environ.get("QT_QPA_PLATFORM"):
+        detected = _autodetect_qt_platform()
+        if detected:
+            os.environ["QT_QPA_PLATFORM"] = detected
+            print(f"[collector] QT_QPA_PLATFORM auto-set to '{detected}'", file=sys.stderr)
+        else:
+            print(
+                "[collector] No graphical session detected "
+                "(WAYLAND_DISPLAY and DISPLAY both empty).",
+                file=sys.stderr,
+            )
+            print(_QT_HELP_MSG, file=sys.stderr)
+            sys.exit(1)
+
+    try:
+        app = QApplication(sys.argv)
+    except Exception as e:
+        print(f"[collector] Failed to start Qt: {e}", file=sys.stderr)
+        print(_QT_HELP_MSG, file=sys.stderr)
+        sys.exit(1)
     app.setStyle("Fusion")
     try:
         window = CollectorWindow(Path(args.project))

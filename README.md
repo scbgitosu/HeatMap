@@ -23,9 +23,14 @@ cd wifi-apartment-survey
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-hp.txt
-# nmcli and iw are system binaries — no pip install needed
-sudo apt install network-manager iw   # if not already present
+# Wi-Fi tools (nmcli, iw) and Qt platform plugin libs are system packages.
+sudo apt install network-manager iw \
+    qtwayland5 libxcb-cursor0 libxkbcommon-x11-0 libxcb-xinerama0
 ```
+
+The `qtwayland5` / `libxcb-*` packages are what PyQt5 needs to attach to your
+Ubuntu session (Wayland *or* Xorg). Without them you'll see
+`Could not load the Qt platform plugin` / `Aborted (core dumped)` at launch.
 
 ---
 
@@ -75,8 +80,16 @@ Confirms that nmcli/iw can see your network and returns reasonable dBm values.
 ### Step 5 — Run the field collector (HP)
 
 ```bash
-python3 hp_collector/collector_app.py --project survey_projects/apartment_test
+./scripts/run_collector.sh --project survey_projects/apartment_test
 ```
+
+The wrapper auto-detects whether your session is Wayland or Xorg, sets
+`QT_QPA_PLATFORM` accordingly, falls back to the other plugin once on failure,
+and prints the exact `apt install` line if any Qt runtime libs are missing.
+
+Running `python3 hp_collector/collector_app.py --project ...` directly also
+works — the app performs the same auto-detection — but the wrapper gives you
+the venv activation and apt-package probe for free.
 
 - Select router position and session name in the left panel.
 - Left-click on the floorplan where you're standing.
@@ -126,6 +139,24 @@ survey_projects/apartment_test/
 ---
 
 ## Troubleshooting
+
+**Collector exits with `Could not load the Qt platform plugin` / `Failed to create wl_display` / `Aborted (core dumped)`:**
+
+The Qt platform plugin can't attach to your display server. Two causes:
+
+1. *Wrong plugin for the session.* Wayland sessions need `QT_QPA_PLATFORM=wayland`; Xorg sessions need `xcb`. The wrapper script picks the right one automatically:
+
+   ```bash
+   ./scripts/run_collector.sh --project survey_projects/apartment_test
+   ```
+
+2. *Missing native libs.* Install the full Qt platform support set:
+
+   ```bash
+   sudo apt install qtwayland5 libxcb-cursor0 libxkbcommon-x11-0 libxcb-xinerama0
+   ```
+
+For a verbose diagnostic, prefix the command with `QT_DEBUG_PLUGINS=1`. If you're on SSH, you must use `ssh -X` (and have `xauth` installed) to forward the display.
 
 **No Wi-Fi interfaces listed in the collector app:**
 ```bash
