@@ -44,3 +44,4 @@ scans/raw/*
 !scans/raw/.gitkeep
 scans/processed/*
 !scans/processed/.gitkeep
+.gitnexus
