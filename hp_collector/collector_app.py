@@ -64,7 +64,13 @@ from PyQt5.QtWidgets import (
 
 from hp_collector.config_loader import load_project
 from hp_collector.data_writer import DataWriter
-from hp_collector.wifi_scan import collect_samples, list_wifi_interfaces, summarize
+from hp_collector.preflight import PreflightResult, run_preflight
+from hp_collector.wifi_scan import (
+    classify_scan_batch,
+    collect_samples,
+    list_wifi_interfaces,
+    summarize,
+)
 from shared.utils import generate_click_id, infer_room, now_iso, project_paths
 
 
@@ -167,10 +173,12 @@ class CollectorWindow(QMainWindow):
         self._raw_rows: List[dict] = []
         self._scan_worker: Optional[ScanWorker] = None
         self._pending_dot = None
+        self._preflight_ok = False
 
         self.setWindowTitle(f"Wi-Fi Collector — {self.config.project_name}")
         self._build_ui()
         self._load_existing_points()
+        self._run_preflight(show_dialog_on_fail=True)
 
     def _build_ui(self):
         central = QWidget()
@@ -233,6 +241,10 @@ class CollectorWindow(QMainWindow):
         if not ifaces:
             self.iface_combo.addItem("wlan0")
         gl4.addWidget(self.iface_combo)
+        self._update_iface_combo_style()
+        self.recheck_btn = QPushButton("Re-check Wi-Fi")
+        self.recheck_btn.clicked.connect(self._on_recheck_wifi)
+        gl4.addWidget(self.recheck_btn)
         sidebar_layout.addWidget(grp4)
 
         # Scan settings
@@ -292,18 +304,67 @@ class CollectorWindow(QMainWindow):
         main_layout.addWidget(self.view)
         self.resize(1100, 700)
 
+    def _wifi_settings(self) -> tuple:
+        iface = self.iface_combo.currentText().strip()
+        ssid = self.ssid_edit.text().strip()
+        bssid = self.bssid_edit.text().strip() or None
+        return iface, ssid, bssid
+
+    def _update_iface_combo_style(self):
+        iface = self.iface_combo.currentText().strip()
+        live = list_wifi_interfaces()
+        if iface and live and iface not in live:
+            self.iface_combo.setStyleSheet("QComboBox { color: #b71c1c; }")
+        else:
+            self.iface_combo.setStyleSheet("")
+
+    def _apply_preflight_state(self, result: PreflightResult):
+        self._preflight_ok = result.ok
+        self.view.setEnabled(result.ok)
+        self._update_iface_combo_style()
+        if result.ok:
+            self._set_status("wifi_ready")
+        else:
+            self._set_status("blocked")
+
+    def _show_preflight_dialog(self, result: PreflightResult):
+        QMessageBox.warning(
+            self,
+            "Wi-Fi preflight failed",
+            result.message(),
+        )
+
+    def _run_preflight(self, show_dialog_on_fail: bool = False) -> PreflightResult:
+        iface, ssid, bssid = self._wifi_settings()
+        result = run_preflight(iface, ssid, bssid)
+        self._apply_preflight_state(result)
+        if not result.ok and show_dialog_on_fail:
+            self._show_preflight_dialog(result)
+        return result
+
+    def _on_recheck_wifi(self):
+        result = self._run_preflight(show_dialog_on_fail=True)
+        if result.ok:
+            QMessageBox.information(self, "Wi-Fi preflight", "Wi-Fi is ready for surveying.")
+
     def _set_status(self, state: str, msg: str = ""):
         colors = {
             "ready": ("#e8f5e9", "#2e7d32"),
+            "wifi_ready": ("#e8f5e9", "#2e7d32"),
             "scanning": ("#fff8e1", "#f57f17"),
             "saved": ("#e3f2fd", "#1565c0"),
+            "warning": ("#fff8e1", "#e65100"),
+            "blocked": ("#ffebee", "#b71c1c"),
             "error": ("#ffebee", "#b71c1c"),
         }
         bg, fg = colors.get(state, ("#fff", "#000"))
         labels = {
             "ready": "Ready",
+            "wifi_ready": "Wi-Fi ready",
             "scanning": "Scanning…",
             "saved": "Saved",
+            "warning": msg or "Partial scan",
+            "blocked": "Wi-Fi blocked — fix and Re-check",
             "error": f"Error: {msg}",
         }
         self.status_label.setText(labels.get(state, state))
@@ -366,6 +427,9 @@ class CollectorWindow(QMainWindow):
             pass
 
     def _on_click(self, x: float, y: float):
+        if not self._preflight_ok:
+            self._run_preflight(show_dialog_on_fail=True)
+            return
         if self._scan_worker and self._scan_worker.isRunning():
             return
 
@@ -423,7 +487,25 @@ class CollectorWindow(QMainWindow):
     def _on_scan_done(self, samples, summary):
         self.view.set_scanning(False)
 
-        # Update pending dot color
+        ssid = self.ssid_edit.text().strip()
+        bssid = self.bssid_edit.text().strip() or None
+        outcome = classify_scan_batch(samples, ssid, bssid)
+
+        if outcome.status == "failed":
+            if self._pending_dot:
+                self.scene.removeItem(self._pending_dot)
+                self._pending_dot = None
+            self._set_status("error", outcome.error_message)
+            if outcome.error_message and "Network is down" in outcome.error_message:
+                self._preflight_ok = False
+                self.view.setEnabled(False)
+            return
+
+        if outcome.status == "partial":
+            summary["note"] = (
+                f"partial_scan:{outcome.failed_count}/{outcome.total_scans} failed"
+            )
+
         if self._pending_dot:
             rssi = summary.get("rssi_avg_dbm")
             color = rssi_to_color(rssi)
@@ -441,7 +523,10 @@ class CollectorWindow(QMainWindow):
 
         rssi = summary.get("rssi_avg_dbm")
         rssi_str = f"{rssi:.1f} dBm" if rssi is not None else "N/A"
-        self._set_status("saved")
+        if outcome.status == "partial":
+            self._set_status("warning", summary["note"])
+        else:
+            self._set_status("saved")
         self.setWindowTitle(
             f"Wi-Fi Collector — {self.config.project_name} | Last: {rssi_str}"
         )

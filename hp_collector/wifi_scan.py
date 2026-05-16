@@ -7,11 +7,13 @@ CLI usage:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
 import time
 import logging
+from dataclasses import dataclass
 from typing import List, Optional
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
@@ -49,6 +51,107 @@ def list_wifi_interfaces() -> List[str]:
         pass
 
     return []
+
+
+def interface_operstate(interface: str) -> Optional[str]:
+    """Return kernel operstate for interface (e.g. UP, DOWN), or None if unknown."""
+    try:
+        out = subprocess.check_output(
+            ["ip", "-j", "link", "show", interface],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        data = json.loads(out)
+        if data and isinstance(data, list):
+            return data[0].get("operstate")
+    except (FileNotFoundError, subprocess.CalledProcessError, json.JSONDecodeError, IndexError):
+        pass
+
+    try:
+        out = subprocess.check_output(
+            ["nmcli", "-t", "-f", "DEVICE,STATE", "device", "status"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        for line in out.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 2 and parts[0].strip() == interface:
+                state = parts[1].strip().lower()
+                if state in ("connected", "disconnected"):
+                    return "UP"
+                if state == "unavailable":
+                    return "DOWN"
+                return state.upper()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+
+    return None
+
+
+@dataclass
+class ScanBatchOutcome:
+    status: str  # ok | failed | partial
+    error_message: str = ""
+    failed_count: int = 0
+    total_scans: int = 0
+
+
+def classify_scan_batch(
+    samples: List[Sample],
+    target_ssid: str,
+    target_bssid: Optional[str] = None,
+) -> ScanBatchOutcome:
+    """Classify a click's sample batch as ok, failed, or partial."""
+    if not samples:
+        return ScanBatchOutcome(
+            status="failed",
+            error_message="No scan samples collected",
+            failed_count=0,
+            total_scans=0,
+        )
+
+    by_round: dict[int, List[Sample]] = {}
+    for s in samples:
+        by_round.setdefault(s.sample_number, []).append(s)
+
+    total = len(by_round)
+    failed = 0
+    first_error = ""
+
+    for group in by_round.values():
+        if all(s.scan_backend == "error" for s in group):
+            failed += 1
+            if not first_error:
+                first_error = next((s.note for s in group if s.note), "Scan failed")
+            continue
+
+        valid = [s for s in group if s.rssi_dbm is not None and s.ssid == target_ssid]
+        if target_bssid:
+            valid = [s for s in valid if s.bssid.upper() == target_bssid.upper()]
+        if not valid:
+            failed += 1
+            if not first_error:
+                first_error = next(
+                    (s.note for s in group if s.note),
+                    "network_not_found",
+                )
+
+    if failed == total:
+        return ScanBatchOutcome(
+            status="failed",
+            error_message=first_error or "All scans failed",
+            failed_count=failed,
+            total_scans=total,
+        )
+    if failed > 0:
+        return ScanBatchOutcome(
+            status="partial",
+            failed_count=failed,
+            total_scans=total,
+        )
+    return ScanBatchOutcome(status="ok", total_scans=total)
 
 
 def _signal_to_dbm(signal: int) -> float:

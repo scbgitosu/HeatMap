@@ -79,6 +79,32 @@ if (( has_project == 0 )); then
     log "no --project supplied; defaulting to survey_projects/apartment_test"
 fi
 
+project_dir=""
+next_is_project=0
+for arg in "$@"; do
+    if (( next_is_project )); then
+        project_dir="${arg}"
+        next_is_project=0
+        continue
+    fi
+    case "${arg}" in
+        --project=*) project_dir="${arg#--project=}" ;;
+        --project) next_is_project=1 ;;
+    esac
+done
+if [[ -z "${project_dir}" ]]; then
+    project_dir="survey_projects/apartment_test"
+fi
+
+log "running Wi-Fi preflight for ${project_dir}..."
+set +e
+python hp_collector/preflight.py --project "${project_dir}"
+preflight_status=$?
+set -e
+if (( preflight_status != 0 )); then
+    fail "Wi-Fi preflight failed (see above). Fix the issues, then re-run."
+fi
+
 primary="$(detect_platform || true)"
 if [[ -z "${primary}" ]]; then
     fail "no graphical session detected (WAYLAND_DISPLAY and DISPLAY both empty).

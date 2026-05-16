@@ -71,11 +71,28 @@ Or copy the `survey_projects/apartment_test/` folder via USB.
 
 ### Step 4 — Sanity-check Wi-Fi scanning (HP)
 
+Run the preflight check (uses `project_config.json` for interface and SSID):
+
+```bash
+python3 hp_collector/preflight.py --project survey_projects/apartment_test
+```
+
+Or override settings manually:
+
+```bash
+python3 hp_collector/preflight.py \
+  --project survey_projects/apartment_test \
+  --interface wlan1 \
+  --ssid "YourNetworkName"
+```
+
+Preflight verifies the adapter exists, the link is UP, rfkill is not blocking, and a trial scan finds your target SSID. Exit code 0 means you are ready to survey.
+
+For deeper debugging, collect sample RSSI readings:
+
 ```bash
 python3 hp_collector/wifi_scan.py --interface wlan1 --ssid "YourNetworkName" --samples 5
 ```
-
-Confirms that nmcli/iw can see your network and returns reasonable dBm values.
 
 ### Step 5 — Run the field collector (HP)
 
@@ -83,9 +100,13 @@ Confirms that nmcli/iw can see your network and returns reasonable dBm values.
 ./scripts/run_collector.sh --project survey_projects/apartment_test
 ```
 
-The wrapper auto-detects whether your session is Wayland or Xorg, sets
-`QT_QPA_PLATFORM` accordingly, falls back to the other plugin once on failure,
-and prints the exact `apt install` line if any Qt runtime libs are missing.
+The wrapper runs Wi-Fi preflight first (same checks as Step 4), then auto-detects
+whether your session is Wayland or Xorg, sets `QT_QPA_PLATFORM` accordingly,
+falls back to the other plugin once on failure, and prints the exact `apt install`
+line if any Qt runtime libs are missing.
+
+The collector blocks floorplan clicks until preflight passes. Use **Re-check Wi-Fi**
+in the sidebar after fixing hardware issues.
 
 Running `python3 hp_collector/collector_app.py --project ...` directly also
 works — the app performs the same auto-detection — but the wrapper gives you
@@ -93,7 +114,8 @@ the venv activation and apt-package probe for free.
 
 - Select router position and session name in the left panel.
 - Left-click on the floorplan where you're standing.
-- Wait for the status banner to show **Saved** (the dot turns green/yellow/red based on RSSI).
+- Wait for the status banner to show **Saved** (or **Partial scan** if some samples failed).
+  Failed clicks are not saved — the dot is removed and the banner shows the error.
 - Walk to the next spot, repeat. Use **Undo** if you misclick.
 - Close the app when done — all data is flushed to disk after every click.
 
@@ -164,6 +186,20 @@ nmcli device         # list all network devices
 iw dev               # alternative
 ```
 The interface is usually `wlan0` or `wlan1`. Edit the interface field in the app sidebar.
+
+**`iw error: Network is down (-100)` or preflight reports interface DOWN:**
+
+The USB Wi-Fi adapter exists in config but the kernel link is down. On the HP:
+
+```bash
+ip link show <your-interface>    # e.g. wlxc01c304311fe
+rfkill list
+sudo rfkill unblock wifi
+sudo ip link set <your-interface> up
+python3 hp_collector/preflight.py --project survey_projects/apartment_test
+```
+
+Common causes: adapter unplugged after sleep, rfkill soft-block, or wrong interface name after reboot.
 
 **nmcli requires sudo / returns error:**  
 Try running with `--backend iw` in `wifi_scan.py` CLI. Note that `iw` scans require `sudo`.
