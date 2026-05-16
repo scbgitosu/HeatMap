@@ -91,11 +91,14 @@ def run_preflight(
         hints.append("Update default_interface in project_config.json if the name changed.")
         return PreflightResult(ok=False, issues=issues, hints=hints)
 
+    # operstate DOWN + NO-CARRIER is normal on scan-only Wi-Fi adapters that are
+    # not associated with an AP; the trial scan below is the real readiness test.
     operstate = interface_operstate(interface)
     if operstate and operstate.upper() != "UP":
-        issues.append(f"Interface '{interface}' is {operstate} (not UP).")
-        hints.append(f"sudo ip link set {interface} up")
-        hints.append(f"sudo rfkill unblock wifi")
+        hints.append(
+            f"Note: {interface} reports operstate {operstate} "
+            "(common when not connected; scanning may still work)."
+        )
 
     rfkill_blocks = check_rfkill_blocked()
     for block in rfkill_blocks:
