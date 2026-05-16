@@ -1,9 +1,15 @@
 {
   "project_name": "Apartment Test",
-  "target_ssid": "Nighthawk-Survey",
+  "target_ssid": "NETGEAR97",
   "target_bssid": "",
-  "default_interface": "wlan0",
+  "default_interface": "wlxc01c304311fe",
   "units": "feet",
   "collection_mode": "click_to_scan",
-  "paths": {}
+  "paths": {
+    "floorplan_png": "survey_projects/apartment_test/floorplan.png",
+    "rooms_json": "survey_projects/apartment_test/rooms.json",
+    "router_positions_json": "survey_projects/apartment_test/router_positions.json",
+    "survey_sessions_dir": "survey_projects/apartment_test/survey_sessions"
+  },
+  "updated_at": "2026-05-16T05:32:25.083Z"
 }
