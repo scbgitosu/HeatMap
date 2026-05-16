@@ -2,9 +2,25 @@
   {
     "router_position_id": "pos1",
     "name": "Current Router",
-    "x_px": 400,
-    "y_px": 300,
+    "x_px": 2578.070588235294,
+    "y_px": 2086.550588235294,
+    "height_ft": 0.0,
+    "notes": ""
+  },
+  {
+    "router_position_id": "pos_2",
+    "name": "Old Router",
+    "x_px": 1156.5176470588235,
+    "y_px": 2939.482352941176,
     "height_ft": 3.0,
+    "notes": ""
+  },
+  {
+    "router_position_id": "pos_3",
+    "name": "Potential Router",
+    "x_px": 2476.8752941176467,
+    "y_px": 2414.230588235294,
+    "height_ft": 4.0,
     "notes": ""
   }
 ]

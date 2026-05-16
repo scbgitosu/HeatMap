@@ -6,31 +6,55 @@ Usage:
 """
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 from pathlib import Path
 from typing import List
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+_repo_root = Path(__file__).resolve().parents[1]
+_mac_analysis = Path(__file__).resolve().parent
+sys.path.insert(0, str(_repo_root))
+sys.path.insert(0, str(_mac_analysis))
 
+import streamlit_canvas_compat  # noqa: F401 — patch Streamlit before drawable canvas
+
+import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
+from matplotlib import patheffects
+from matplotlib.figure import Figure
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
+from streamlit_project_cli import parse_streamlit_project_args
+
 from shared.utils import now_iso, project_paths
+
+# Cap on-canvas display size so large floorplan PNGs fit the browser (coordinates are
+# mapped back to full image pixel space when saving).
+_MAX_DISPLAY_CANVAS_W = 1200
+_MAX_DISPLAY_CANVAS_H = 850
+
+
+def _display_canvas_dimensions(img_w: int, img_h: int) -> tuple[int, int, float, float]:
+    """Return canvas (width, height) and scale factors canvas px → image px."""
+    if img_w < 1 or img_h < 1:
+        return 1, 1, 1.0, 1.0
+    scale = min(_MAX_DISPLAY_CANVAS_W / img_w, _MAX_DISPLAY_CANVAS_H / img_h)
+    scale = min(scale, 1.0)
+    cw = max(1, int(round(img_w * scale)))
+    ch = max(1, int(round(img_h * scale)))
+    return cw, ch, img_w / cw, img_h / ch
+
+
+def _canvas_to_image_polygon(
+    poly: List[List[float]], sx: float, sy: float
+) -> List[List[float]]:
+    return [[p[0] * sx, p[1] * sy] for p in poly]
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--project", default="survey_projects/apartment_test")
-    try:
-        idx = sys.argv.index("--")
-        args = parser.parse_args(sys.argv[idx + 1:])
-    except ValueError:
-        args = parser.parse_args([])
-    return args
+    return parse_streamlit_project_args()
 
 
 def _polygon_centroid(points: List[List[float]]) -> tuple:
@@ -39,6 +63,61 @@ def _polygon_centroid(points: List[List[float]]) -> tuple:
     xs = [p[0] for p in points]
     ys = [p[1] for p in points]
     return sum(xs) / len(xs), sum(ys) / len(ys)
+
+
+def _scale_preview_and_polygons(
+    img: Image.Image,
+    polygons: List[List[List[float]]],
+    max_side: int = 1400,
+) -> tuple[Image.Image, List[List[List[float]]]]:
+    """Downscale image and polygon coordinates together for a fast matplotlib preview."""
+    w, h = img.size
+    if w < 1 or h < 1 or not polygons:
+        return img, polygons
+    if max(w, h) <= max_side:
+        return img, polygons
+    scale = max_side / max(w, h)
+    nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+    pic = img.resize((nw, nh), Image.Resampling.LANCZOS)
+    scaled = [[[p[0] * scale, p[1] * scale] for p in poly] for poly in polygons]
+    return pic, scaled
+
+
+def _room_number_map_figure(
+    img: Image.Image,
+    polygons: List[List[List[float]]],
+) -> Figure:
+    """Floorplan with polygons outlined, filled, and labeled 1, 2, 3, … (matches form order)."""
+    preview_img, polys = _scale_preview_and_polygons(img, polygons)
+    n = len([p for p in polys if len(p) >= 3])
+    fig_w = min(14.0, max(6.0, preview_img.width / 100))
+    fig_h = min(12.0, max(5.0, preview_img.height / 100))
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.imshow(preview_img)
+    cmap = plt.cm.tab10(np.linspace(0, 1, min(10, max(n, 1))))
+    for i, poly in enumerate(polys):
+        if len(poly) < 3:
+            continue
+        c = cmap[i % len(cmap)]
+        xs = [p[0] for p in poly] + [poly[0][0]]
+        ys = [p[1] for p in poly] + [poly[0][1]]
+        ax.fill(xs, ys, facecolor=c, alpha=0.28, edgecolor=c, linewidth=2.2)
+        cx, cy = _polygon_centroid(poly)
+        outline = [patheffects.withStroke(linewidth=3.5, foreground="black")]
+        ax.text(
+            cx,
+            cy,
+            str(i + 1),
+            fontsize=17,
+            fontweight="bold",
+            color="white",
+            ha="center",
+            va="center",
+            path_effects=outline,
+        )
+    ax.set_axis_off()
+    fig.tight_layout(pad=0.2)
+    return fig
 
 
 def main():
@@ -60,6 +139,7 @@ def main():
 
     img = Image.open(floorplan_path)
     img_w, img_h = img.size
+    canvas_w, canvas_h, sx, sy = _display_canvas_dimensions(img_w, img_h)
 
     # Load metadata for scale info
     metadata = {}
@@ -84,9 +164,16 @@ def main():
     with tab_rooms:
         st.subheader("Draw room polygons")
         st.info(
-            "Select **Polygon** mode, click to add vertices, and double-click to close. "
-            "Each completed polygon will appear in the table below — fill in room ID and name, then Save."
+            "**How to draw:** **Left-click** = add a corner · **Right-click** = finish that room · "
+            "**Double-click** = remove the last corner (not “done”). "
+            "When **Numbered map** appears below, each closed region is labeled **1, 2, 3…** — "
+            "those numbers are the same **Room 1, Room 2, …** in the form."
         )
+        if canvas_h < img_h or canvas_w < img_w:
+            st.caption(
+                f"Display scaled to **{canvas_w}×{canvas_h}** px to fit the window "
+                f"(floorplan is {img_w}×{img_h} px). Saved shapes use **full-resolution** coordinates."
+            )
 
         canvas_result = st_canvas(
             fill_color="rgba(100, 100, 200, 0.15)",
@@ -94,8 +181,8 @@ def main():
             stroke_color="#6464C8",
             background_image=img,
             update_streamlit=True,
-            width=img_w,
-            height=img_h,
+            width=canvas_w,
+            height=canvas_h,
             drawing_mode="polygon",
             key="rooms_canvas",
         )
@@ -111,29 +198,60 @@ def main():
                         if seg[0] in ("M", "L") and len(seg) >= 3:
                             points.append([seg[1], seg[2]])
                     if len(points) >= 3:
-                        polygons.append(points)
+                        polygons.append(
+                            _canvas_to_image_polygon(points, sx, sy),
+                        )
 
-        st.write(f"**{len(polygons)} polygon(s) drawn**")
+        if polygons:
+            display_polys = polygons
+        else:
+            display_polys = []
+            for r in existing_rooms:
+                p = r.get("polygon")
+                if p and len(p) >= 3:
+                    display_polys.append(p)
 
-        # Build editable room rows
-        if polygons or existing_rooms:
-            st.subheader("Room metadata")
+        st.write(
+            f"**{len(display_polys)}** room outline(s) to name — "
+            + (
+                "from the canvas above."
+                if polygons
+                else "from `rooms.json` (canvas is empty; draw new shapes to replace)."
+            )
+        )
+
+        if display_polys:
+            st.subheader("Numbered map")
+            st.caption(
+                "Each region’s **color and number** match **Room 1 / Room 2 / …** below. "
+                "Order is usually the order polygons were finished on the canvas; "
+                "if only a saved file is loaded, it follows the order in that file."
+            )
+            fig = _room_number_map_figure(img, display_polys)
+            st.pyplot(fig, use_container_width=True)
+            plt.close(fig)
+
+            st.subheader("Name each room")
             room_rows = []
-            for i, poly in enumerate(polygons):
+            for i, poly in enumerate(display_polys):
                 cx, cy = _polygon_centroid(poly)
-                # Pre-fill from existing if available
                 existing = existing_rooms[i] if i < len(existing_rooms) else {}
+                st.markdown(
+                    f"##### Room {i + 1} — {len(poly)} corners · label centre ≈ ({cx:.0f}, {cy:.0f}) px"
+                )
                 col1, col2 = st.columns(2)
                 with col1:
                     rid = st.text_input(
-                        f"Room ID #{i+1}",
-                        value=existing.get("room_id", f"room_{i+1}"),
+                        "Short ID (stored in JSON)",
+                        value=existing.get("room_id", f"room_{i + 1}"),
+                        placeholder="kitchen, bed_1, bath…",
                         key=f"room_id_{i}",
                     )
                 with col2:
                     rname = st.text_input(
-                        f"Room name #{i+1}",
+                        "Display name",
                         value=existing.get("room_name", ""),
+                        placeholder="Kitchen, Primary bedroom…",
                         key=f"room_name_{i}",
                     )
                 room_rows.append({
@@ -144,13 +262,16 @@ def main():
                     "label_y": cy,
                 })
 
-            if st.button("Save rooms.json", type="primary"):
+            if st.button("Save rooms.json", type="primary", key="save_rooms_json"):
                 with open(paths["rooms_json"], "w", encoding="utf-8") as f:
                     json.dump(room_rows, f, indent=2)
                 st.success(f"Saved {len(room_rows)} rooms to `{paths['rooms_json']}`")
                 st.json(room_rows)
         else:
-            st.info("Draw at least one polygon above, then fill in names and save.")
+            st.info(
+                "Close at least one polygon on the canvas (right-click to finish), "
+                "or ensure `rooms.json` contains polygons — then a numbered map and naming fields appear."
+            )
 
         if existing_rooms:
             st.subheader("Currently saved rooms.json")
@@ -160,6 +281,11 @@ def main():
     with tab_routers:
         st.subheader("Place router positions")
         st.info("Select **Point** mode, then click to place router/AP positions.")
+        if canvas_h < img_h or canvas_w < img_w:
+            st.caption(
+                f"Same display scale as Rooms (**{canvas_w}×{canvas_h}** px). "
+                "Saved positions are in full floorplan pixels."
+            )
 
         router_canvas = st_canvas(
             fill_color="rgba(255, 165, 0, 0.6)",
@@ -167,8 +293,8 @@ def main():
             stroke_color="#FFA500",
             background_image=img,
             update_streamlit=True,
-            width=img_w,
-            height=img_h,
+            width=canvas_w,
+            height=canvas_h,
             drawing_mode="point",
             point_display_radius=8,
             key="router_canvas",
@@ -178,7 +304,9 @@ def main():
         if router_canvas.json_data and router_canvas.json_data.get("objects"):
             for obj in router_canvas.json_data["objects"]:
                 if obj.get("type") == "circle":
-                    router_points.append([obj.get("left", 0), obj.get("top", 0)])
+                    rx = float(obj.get("left", 0)) * sx
+                    ry = float(obj.get("top", 0)) * sy
+                    router_points.append([rx, ry])
 
         st.write(f"**{len(router_points)} point(s) placed**")
 

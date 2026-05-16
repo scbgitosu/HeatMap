@@ -6,28 +6,25 @@ Usage:
 """
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+_mac_analysis = Path(__file__).resolve().parent
+_repo_root = _mac_analysis.parent
+sys.path.insert(0, str(_repo_root))
+sys.path.insert(0, str(_mac_analysis))
 
 import streamlit as st
 from PIL import Image
 
+from streamlit_project_cli import parse_streamlit_project_args
+
 from shared.utils import now_iso, project_paths
 
-# --- Argument parsing (Streamlit passes args after --) ---
+# --- Argument parsing (Streamlit forwards args after `--`, and often `--project` without `--`) ---
 def _parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--project", default="survey_projects/apartment_test")
-    try:
-        idx = sys.argv.index("--")
-        args = parser.parse_args(sys.argv[idx + 1:])
-    except ValueError:
-        args = parser.parse_args([])
-    return args
+    return parse_streamlit_project_args()
 
 
 def main():
