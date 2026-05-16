@@ -1,0 +1,26 @@
+[
+  {
+    "router_position_id": "pos_1",
+    "name": "Hall",
+    "x_px": 1187.84,
+    "y_px": 999.905882352941,
+    "height_ft": 4.0,
+    "notes": ""
+  },
+  {
+    "router_position_id": "pos_2",
+    "name": "Fridge",
+    "x_px": 655.3599999999999,
+    "y_px": 840.8847058823528,
+    "height_ft": 4.0,
+    "notes": ""
+  },
+  {
+    "router_position_id": "pos_3",
+    "name": "Original",
+    "x_px": 397.55294117647054,
+    "y_px": 1563.7082352941175,
+    "height_ft": 4.0,
+    "notes": ""
+  }
+]

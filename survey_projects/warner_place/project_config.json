@@ -1,0 +1,17 @@
+{
+  "project_name": "warner_place",
+  "target_ssid": "NETGEAR97",
+  "target_bssid": "",
+  "default_interface": "wlxc01c304311fe",
+  "units": "feet",
+  "collection_mode": "click_to_scan",
+  "scan_backend": "iw",
+  "paths": {
+    "floorplan_png": "survey_projects/warner_place/floorplan.png",
+    "rooms_json": "survey_projects/warner_place/rooms.json",
+    "router_positions_json": "survey_projects/warner_place/router_positions.json",
+    "walk_waypoints_json": "survey_projects/warner_place/walk_waypoints.json",
+    "survey_sessions_dir": "survey_projects/warner_place/survey_sessions"
+  },
+  "updated_at": "2026-05-16T21:20:59.509Z"
+}

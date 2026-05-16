@@ -146,7 +146,7 @@ bash scripts/install_collector_launcher.sh
 
 - Select router position and session name in the left panel.
 - Leave scan backend on `iw` unless you need `auto`/`nmcli` fallback.
-- If you created a walk template, keep **Guided walk waypoint snap** enabled and click near the next waypoint.
+- If you created a walk template, the collector shows numbered waypoint dots on the floorplan. Keep **Guided walk waypoint snap** enabled to highlight the next stop and click within about 40 px of that highlighted waypoint.
 - Left-click on the floorplan where you're standing.
 - Wait for the status banner to show **Saved** (or **Partial scan** if some samples failed).
   Failed clicks are not saved — the dot is removed and the banner shows the error.

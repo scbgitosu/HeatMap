@@ -172,6 +172,7 @@ class CollectorWindow(QMainWindow):
         self.paths = project_paths(project_dir)
         self.waypoints = self._load_walk_waypoints()
         self._used_waypoint_ids: set[str] = set()
+        self._waypoint_items: List[object] = []
 
         self._click_dots: List[dict] = []  # {dot, summary_row}
         self._summary_rows: List[dict] = []
@@ -277,7 +278,12 @@ class CollectorWindow(QMainWindow):
         self.guided_walk_checkbox = QCheckBox("Guided walk waypoint snap")
         self.guided_walk_checkbox.setEnabled(bool(self.waypoints))
         self.guided_walk_checkbox.setChecked(bool(self.waypoints))
+        self.guided_walk_checkbox.toggled.connect(self._on_guided_walk_toggled)
         gl5.addWidget(self.guided_walk_checkbox)
+        self.next_waypoint_label = QLabel("")
+        self.next_waypoint_label.setWordWrap(True)
+        self.next_waypoint_label.setStyleSheet("color: #1565c0;")
+        gl5.addWidget(self.next_waypoint_label)
         sidebar_layout.addWidget(grp5)
 
         # Status banner
@@ -317,6 +323,7 @@ class CollectorWindow(QMainWindow):
 
         self._draw_room_overlays()
         self._draw_router_overlays()
+        self._draw_waypoint_overlays()
 
         main_layout.addWidget(self.view)
         self.resize(1100, 700)
@@ -419,6 +426,62 @@ class CollectorWindow(QMainWindow):
             txt.setDefaultTextColor(QColor(200, 100, 0))
             txt.setPos(rp.x_px + r + 2, rp.y_px - 8)
 
+    def _draw_waypoint_overlays(self):
+        self._refresh_waypoint_overlays()
+
+    def _refresh_waypoint_overlays(self):
+        if not hasattr(self, "scene"):
+            return
+        for item in self._waypoint_items:
+            self.scene.removeItem(item)
+        self._waypoint_items = []
+
+        if not self.waypoints:
+            self._update_next_waypoint_hint()
+            return
+
+        guided = self.guided_walk_checkbox.isChecked()
+        next_waypoint = self._next_waypoint() if guided else None
+        next_waypoint_id = next_waypoint.get("waypoint_id", "") if next_waypoint else ""
+
+        for waypoint in self.waypoints:
+            waypoint_id = waypoint.get("waypoint_id", "")
+            x = float(waypoint.get("x_px", 0))
+            y = float(waypoint.get("y_px", 0))
+            order = waypoint.get("order", "")
+            label = self._waypoint_display_label(waypoint)
+            is_done = waypoint_id in self._used_waypoint_ids
+            is_next = bool(next_waypoint_id and waypoint_id == next_waypoint_id)
+
+            if is_next:
+                r = 12
+                pen = QPen(QColor(0, 160, 255), 3)
+                brush = QBrush(QColor(0, 160, 255, 35))
+                text = f"NEXT {label}"
+                text_color = QColor(0, 110, 200)
+            elif is_done:
+                r = 7
+                pen = QPen(QColor(120, 120, 120), 1.5)
+                brush = QBrush(QColor(120, 120, 120, 110))
+                text = str(order or waypoint_id)
+                text_color = QColor(110, 110, 110)
+            else:
+                r = 7
+                pen = QPen(QColor(0, 160, 255), 1.8)
+                brush = QBrush(QColor(0, 160, 255, 25))
+                text = str(order or waypoint_id)
+                text_color = QColor(0, 120, 200)
+
+            dot = self.scene.addEllipse(x - r, y - r, r * 2, r * 2, pen, brush)
+            dot.setZValue(5)
+            txt = self.scene.addText(text)
+            txt.setDefaultTextColor(text_color)
+            txt.setPos(x + r + 3, y - r - 2)
+            txt.setZValue(5)
+            self._waypoint_items.extend([dot, txt])
+
+        self._update_next_waypoint_hint()
+
     def _data_writer(self) -> DataWriter:
         session_id = self.session_edit.text().strip() or "session"
         session_dir = self.paths["survey_sessions_dir"] / session_id
@@ -434,30 +497,75 @@ class CollectorWindow(QMainWindow):
         except Exception:
             return []
 
+    def _waypoint_display_label(self, waypoint: dict) -> str:
+        waypoint_id = waypoint.get("waypoint_id", "")
+        label = waypoint.get("label", "")
+        if label:
+            return f"{waypoint_id} ({label})" if waypoint_id else label
+        return waypoint_id
+
+    def _sync_used_waypoints(self):
+        self._used_waypoint_ids = {
+            row["waypoint_id"]
+            for row in self._summary_rows
+            if row.get("waypoint_id")
+        }
+
+    def _next_waypoint(self) -> Optional[dict]:
+        for waypoint in self.waypoints:
+            waypoint_id = waypoint.get("waypoint_id", "")
+            if waypoint_id and waypoint_id not in self._used_waypoint_ids:
+                return waypoint
+        return None
+
+    def _update_next_waypoint_hint(self):
+        if not hasattr(self, "next_waypoint_label"):
+            return
+        if not self.waypoints:
+            self.next_waypoint_label.setText("")
+            return
+
+        total = len(self.waypoints)
+        completed = len(self._used_waypoint_ids)
+        if not self.guided_walk_checkbox.isChecked():
+            self.next_waypoint_label.setText(
+                f"Waypoints visible ({completed}/{total}); snap is off."
+            )
+            return
+
+        waypoint = self._next_waypoint()
+        if waypoint:
+            self.next_waypoint_label.setText(
+                f"Next: {self._waypoint_display_label(waypoint)} "
+                f"({completed}/{total} done)"
+            )
+        else:
+            self.next_waypoint_label.setText(f"Walk complete ({completed}/{total})")
+
+    def _on_guided_walk_toggled(self, _checked: bool):
+        self._refresh_waypoint_overlays()
+
     def _snap_to_waypoint(self, x: float, y: float, tolerance_px: float = 40.0) -> tuple[float, float, str, str]:
         if not self.waypoints or not self.guided_walk_checkbox.isChecked():
             return x, y, "", ""
-        best = None
-        best_dist = None
-        for waypoint in self.waypoints:
-            waypoint_id = waypoint.get("waypoint_id", "")
-            if waypoint_id in self._used_waypoint_ids:
-                continue
-            dx = float(waypoint.get("x_px", 0)) - x
-            dy = float(waypoint.get("y_px", 0)) - y
-            dist = (dx * dx + dy * dy) ** 0.5
-            if best_dist is None or dist < best_dist:
-                best = waypoint
-                best_dist = dist
-        if not best or best_dist is None or best_dist > tolerance_px:
+        waypoint = self._next_waypoint()
+        if not waypoint:
             return x, y, "", ""
-        waypoint_id = best.get("waypoint_id", "")
+
+        dx = float(waypoint.get("x_px", 0)) - x
+        dy = float(waypoint.get("y_px", 0)) - y
+        dist = (dx * dx + dy * dy) ** 0.5
+        if dist > tolerance_px:
+            return x, y, "", ""
+
+        waypoint_id = waypoint.get("waypoint_id", "")
         self._used_waypoint_ids.add(waypoint_id)
+        self._refresh_waypoint_overlays()
         return (
-            float(best.get("x_px", x)),
-            float(best.get("y_px", y)),
+            float(waypoint.get("x_px", x)),
+            float(waypoint.get("y_px", y)),
             waypoint_id,
-            best.get("label", ""),
+            waypoint.get("label", ""),
         )
 
     def _load_existing_points(self):
@@ -479,6 +587,8 @@ class CollectorWindow(QMainWindow):
                     pass
         except Exception:
             pass
+        self._sync_used_waypoints()
+        self._refresh_waypoint_overlays()
 
     def _on_click(self, x: float, y: float):
         if not self._preflight_ok:
@@ -554,6 +664,10 @@ class CollectorWindow(QMainWindow):
             if self._pending_dot:
                 self.scene.removeItem(self._pending_dot)
                 self._pending_dot = None
+            pending_waypoint_id = getattr(self, "_current_context", {}).get("waypoint_id", "")
+            if pending_waypoint_id:
+                self._used_waypoint_ids.discard(pending_waypoint_id)
+                self._refresh_waypoint_overlays()
             self._set_status("error", outcome.error_message)
             if outcome.error_message and "Network is down" in outcome.error_message:
                 self._preflight_ok = False
@@ -579,6 +693,8 @@ class CollectorWindow(QMainWindow):
         self._raw_rows.extend([s.to_dict() for s in samples])
         self._click_dots.append({"dot": self._pending_dot, "summary_row": summary})
         self._pending_dot = None
+        self._sync_used_waypoints()
+        self._refresh_waypoint_overlays()
 
         rssi = summary.get("rssi_avg_dbm")
         rssi_str = f"{rssi:.1f} dBm" if rssi is not None else "N/A"
@@ -602,6 +718,10 @@ class CollectorWindow(QMainWindow):
         if self._pending_dot:
             self.scene.removeItem(self._pending_dot)
             self._pending_dot = None
+        pending_waypoint_id = getattr(self, "_current_context", {}).get("waypoint_id", "")
+        if pending_waypoint_id:
+            self._used_waypoint_ids.discard(pending_waypoint_id)
+            self._refresh_waypoint_overlays()
         self._set_status("error", msg)
 
     def _undo_last(self):
@@ -618,6 +738,8 @@ class CollectorWindow(QMainWindow):
         dw = self._data_writer()
         dw.rewrite_summary(self._summary_rows)
         dw.rewrite_raw(self._raw_rows)
+        self._sync_used_waypoints()
+        self._refresh_waypoint_overlays()
         self._set_status("ready")
 
     def _add_note(self):

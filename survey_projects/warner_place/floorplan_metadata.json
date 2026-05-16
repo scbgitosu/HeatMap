@@ -1,0 +1,22 @@
+{
+  "image_width_px": 2048,
+  "image_height_px": 2048,
+  "units": "feet",
+  "scale_pixels_per_foot": 45.29909476774188,
+  "scale_reference": {
+    "x1": 284.85818181818183,
+    "y1": 413.32363636363635,
+    "x2": 312.78545454545457,
+    "y2": 1137.570909090909,
+    "length_ft": 16.0
+  },
+  "origin": {
+    "x": 0,
+    "y": 0
+  },
+  "source": "floorplans/raw/floorplan.png",
+  "rotation_applied": 0,
+  "crop_applied": null,
+  "notes": "",
+  "created_at": "2026-05-16T21:10:57.669Z"
+}
