@@ -277,6 +277,15 @@ def optimize_placement(
             f"\nBest suggested coordinate: ({best['x_px']:.0f}, {best['y_px']:.0f}) "
             f"score {best['score']:.1f}, {best['pct_area_good']:.0f}% area good"
         )
+    return {
+        "model_params": params,
+        "recommendation": recommendation,
+        "artifacts": {
+            "model_params_json": output_dir / "model_params.json",
+            "placement_recommendation_json": output_dir / "placement_recommendation.json",
+            "predicted_coverage_png": output_dir / "predicted_coverage_rank1.png" if ranked else None,
+        },
+    }
 
 
 def main():

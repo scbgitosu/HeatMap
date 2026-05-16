@@ -36,6 +36,19 @@ Ubuntu session (Wayland *or* Xorg). Without them you'll see
 
 ## Step-by-step workflow
 
+### Preferred Mac control panel
+
+Most Mac-side setup and analysis can be run from one dashboard:
+
+```bash
+streamlit run mac_analysis/survey_dashboard.py -- --project survey_projects/apartment_test
+```
+
+The dashboard checks project readiness, links setup commands, generates heatmaps,
+compares sessions, runs placement optimization, displays generated results, and
+shows HP transfer/collector commands. The individual scripts below remain useful
+for manual or advanced runs.
+
 ### Step 1 — Import the floorplan (Mac)
 
 Put a photo or blueprint image in `floorplans/raw/`, then run:
@@ -99,6 +112,16 @@ python3 hp_collector/wifi_scan.py --interface wlan1 --ssid "YourNetworkName" --s
 
 ### Step 5 — Run the field collector (HP)
 
+Button-style launcher:
+
+```bash
+python3 hp_collector/collector_launcher.py --project survey_projects/apartment_test
+```
+
+The launcher can run preflight, launch the collector, and show command output in
+one window. It still uses the robust shell launcher below for the actual collector
+startup.
+
 ```bash
 ./scripts/run_collector.sh --project survey_projects/apartment_test
 ```
@@ -114,6 +137,12 @@ in the sidebar after fixing hardware issues.
 Running `python3 hp_collector/collector_app.py --project ...` directly also
 works — the app performs the same auto-detection — but the wrapper gives you
 the venv activation and apt-package probe for free.
+
+On Linux, install an application-menu launcher:
+
+```bash
+bash scripts/install_collector_launcher.sh
+```
 
 - Select router position and session name in the left panel.
 - Leave scan backend on `iw` unless you need `auto`/`nmcli` fallback.
@@ -134,6 +163,10 @@ rsync -av user@hp-laptop:~/wifi-survey/survey_projects/apartment_test/survey_ses
 
 ### Step 7 — Generate heatmaps (Mac)
 
+Dashboard path: open the **Heatmaps** tab and click **Generate Heatmaps**.
+
+Manual fallback:
+
 ```bash
 python3 mac_analysis/heatmap_generator.py \
     --project survey_projects/apartment_test \
@@ -149,6 +182,10 @@ Produces three images in `output/heatmaps/`:
 ### Step 8 — Compare router placement trials (Mac)
 
 After surveying the apartment once per router candidate (three sessions, three walks):
+
+Dashboard path: open **Compare Sessions**, select the trials, and click **Run Comparison**.
+
+Manual fallback:
 
 ```bash
 python3 mac_analysis/session_compare.py \
@@ -175,6 +212,10 @@ Use the same walk pattern (similar click positions) across trials so comparisons
 
 After at least three router-position trials and a calibrated floorplan scale:
 
+Dashboard path: open **Optimize Placement**, select the training sessions, and click **Run Placement Optimizer**.
+
+Manual fallback:
+
 ```bash
 python3 mac_analysis/placement_optimizer.py \
     --project survey_projects/apartment_test \
@@ -200,6 +241,7 @@ survey_projects/apartment_test/
   rooms.json                   # room polygons and labels
   router_positions.json        # AP candidate positions
   walk_waypoints.json          # optional matched-walk survey points
+  output/                      # dashboard-generated heatmaps, comparisons, optimizer results
   survey_sessions/
     baseline_current_router/
       measurements_raw.csv     # one row per BSSID per scan

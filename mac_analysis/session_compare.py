@@ -357,6 +357,7 @@ def print_report(results: list[SessionMetrics], *, good_dbm: float, weak_dbm: fl
                 f"     Interference proxy  : {p.neighbor_count_same_channel_mean:.1f} co-channel  "
                 f"{p.neighbor_count_adjacent_mean or 0:.1f} adjacent"
             )
+        if p.valid_count:
             print(
                 f"     Point coverage      : {100 - p.pct_below_good:.0f}% ≥ {good_dbm:.0f} dBm  "
                 f"({p.pct_below_weak:.0f}% weak)"
@@ -381,6 +382,34 @@ def print_report(results: list[SessionMetrics], *, good_dbm: float, weak_dbm: fl
         f"(session «{winner.session_id}», score {winner.composite_score:.1f})."
     )
     print("=" * 72 + "\n")
+
+
+def _metrics_as_rows(results: list[SessionMetrics]) -> list[dict]:
+    rows = []
+    for sm in sorted(results, key=lambda x: x.rank):
+        p, g = sm.points, sm.grid
+        rows.append({
+            "rank": sm.rank,
+            "session_id": sm.session_id,
+            "router_position_id": sm.router_position_id,
+            "router_name": sm.router_name,
+            "composite_score": sm.composite_score,
+            "point_count": p.point_count,
+            "valid_count": p.valid_count,
+            "rssi_mean_dbm": p.rssi_mean,
+            "rssi_min_dbm": p.rssi_min,
+            "rssi_p10_dbm": p.rssi_p10,
+            "mean_rssi_std_db": p.mean_rssi_std,
+            "snr_mean_db": p.snr_mean,
+            "tx_bitrate_mean_mbps": p.tx_bitrate_mean,
+            "rx_bitrate_mean_mbps": p.rx_bitrate_mean,
+            "neighbor_count_same_channel_mean": p.neighbor_count_same_channel_mean,
+            "pct_area_good": g.pct_area_good,
+            "pct_area_weak": g.pct_area_weak,
+            "rssi_grid_min_dbm": g.rssi_grid_min,
+            "rssi_grid_p10_dbm": g.rssi_grid_p10,
+        })
+    return rows
 
 
 def export_per_session_heatmaps(
@@ -416,6 +445,77 @@ def export_per_session_heatmaps(
         )
 
 
+def run_session_comparison(
+    project_dir: Path,
+    session_ids: list[str],
+    output_dir: Path,
+    *,
+    good_threshold: float = DEFAULT_GOOD_DBM,
+    weak_threshold: float = DEFAULT_WEAK_DBM,
+    export_heatmaps: bool = False,
+) -> dict:
+    paths = project_paths(project_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if not session_ids:
+        session_ids = discover_sessions(paths["survey_sessions_dir"])
+    if not session_ids:
+        raise ValueError(f"No survey sessions found under {paths['survey_sessions_dir']}")
+
+    results = analyze_project(
+        project_dir,
+        session_ids,
+        good_dbm=good_threshold,
+        weak_dbm=weak_threshold,
+    )
+    valid_results = [sm for sm in results if sm.points.valid_count > 0]
+    if not valid_results:
+        raise ValueError("No valid measurement data in any session.")
+
+    artifacts = {
+        "metrics_csv": output_dir / "comparison_metrics.csv",
+        "room_csv": output_dir / "comparison_by_room.csv",
+        "bars_png": output_dir / "comparison_bars.png",
+        "ranking_png": output_dir / "comparison_ranking.png",
+        "best_vs_worst_png": output_dir / "comparison_best_vs_worst.png",
+    }
+    write_metrics_csv(valid_results, artifacts["metrics_csv"])
+    write_room_csv(valid_results, artifacts["room_csv"])
+    plot_comparison_bars(valid_results, artifacts["bars_png"])
+    plot_ranking(valid_results, artifacts["ranking_png"])
+
+    walk_pairs = build_walk_pairs(project_dir, [sm.session_id for sm in valid_results])
+    if walk_pairs:
+        artifacts["walk_pairs_csv"] = output_dir / "walk_pairs.csv"
+        artifacts["walk_deltas_png"] = output_dir / "comparison_matched_walk_deltas.png"
+        write_walk_pairs(walk_pairs, artifacts["walk_pairs_csv"])
+        plot_walk_deltas(walk_pairs, artifacts["walk_deltas_png"])
+
+    rooms = _load_rooms(paths["rooms_json"])
+    plot_coverage_diff(
+        valid_results,
+        project_dir,
+        rooms,
+        artifacts["best_vs_worst_png"],
+        good_dbm=good_threshold,
+    )
+
+    if export_heatmaps:
+        export_per_session_heatmaps(
+            project_dir,
+            valid_results,
+            output_dir,
+            weak_dbm=weak_threshold,
+        )
+        artifacts["heatmaps_dir"] = output_dir / "heatmaps"
+
+    return {
+        "results": valid_results,
+        "metrics": _metrics_as_rows(valid_results),
+        "artifacts": artifacts,
+        "walk_pairs": walk_pairs,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Compare Wi-Fi survey sessions across router placement trials"
@@ -448,61 +548,28 @@ def main():
 
     project_dir = Path(args.project)
     paths = project_paths(project_dir)
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    if args.sessions.strip():
-        session_ids = [s.strip() for s in args.sessions.split(",") if s.strip()]
-    else:
-        session_ids = discover_sessions(paths["survey_sessions_dir"])
-
-    if not session_ids:
-        print(f"No survey sessions found under {paths['survey_sessions_dir']}")
+    session_ids = (
+        [s.strip() for s in args.sessions.split(",") if s.strip()]
+        if args.sessions.strip()
+        else discover_sessions(paths["survey_sessions_dir"])
+    )
+    try:
+        comparison = run_session_comparison(
+            project_dir,
+            session_ids,
+            Path(args.output_dir),
+            good_threshold=args.good_threshold,
+            weak_threshold=args.weak_threshold,
+            export_heatmaps=args.export_heatmaps,
+        )
+    except ValueError as e:
+        print(str(e))
         sys.exit(1)
-
-    results = analyze_project(
-        project_dir,
-        session_ids,
+    print_report(
+        comparison["results"],
         good_dbm=args.good_threshold,
         weak_dbm=args.weak_threshold,
     )
-
-    empty = [sm for sm in results if sm.points.valid_count == 0]
-    if empty:
-        for sm in empty:
-            print(f"Warning: session '{sm.session_id}' has no valid measurements.")
-
-    valid_results = [sm for sm in results if sm.points.valid_count > 0]
-    if not valid_results:
-        print("No valid measurement data in any session.")
-        sys.exit(1)
-
-    print_report(valid_results, good_dbm=args.good_threshold, weak_dbm=args.weak_threshold)
-    write_metrics_csv(valid_results, output_dir / "comparison_metrics.csv")
-    write_room_csv(valid_results, output_dir / "comparison_by_room.csv")
-    plot_comparison_bars(valid_results, output_dir / "comparison_bars.png")
-    plot_ranking(valid_results, output_dir / "comparison_ranking.png")
-    walk_pairs = build_walk_pairs(project_dir, [sm.session_id for sm in valid_results])
-    if walk_pairs:
-        write_walk_pairs(walk_pairs, output_dir / "walk_pairs.csv")
-        plot_walk_deltas(walk_pairs, output_dir / "comparison_matched_walk_deltas.png")
-
-    rooms = _load_rooms(paths["rooms_json"])
-    plot_coverage_diff(
-        valid_results,
-        project_dir,
-        rooms,
-        output_dir / "comparison_best_vs_worst.png",
-        good_dbm=args.good_threshold,
-    )
-
-    if args.export_heatmaps:
-        export_per_session_heatmaps(
-            project_dir,
-            valid_results,
-            output_dir,
-            weak_dbm=args.weak_threshold,
-        )
 
 
 if __name__ == "__main__":

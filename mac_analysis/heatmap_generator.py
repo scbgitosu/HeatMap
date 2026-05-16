@@ -281,6 +281,30 @@ def print_stats(measurements: List[dict], session_id: str):
     if not valid:
         print("No valid measurements.")
         return
+    stats = measurement_stats(measurements)
+    print(f"\n=== Stats for session '{session_id}' ===")
+    print(f"  Total valid points : {stats['valid_count']}")
+    print(f"  Average RSSI       : {stats['rssi_avg_dbm']:.1f} dBm")
+    print(f"  Worst RSSI         : {stats['rssi_min_dbm']:.1f} dBm")
+    print(f"  Points < -67 dBm   : {stats['count_below_67']} ({stats['pct_below_67']:.0f}%)")
+    print(f"  Points < -70 dBm   : {stats['count_below_70']} ({stats['pct_below_70']:.0f}%)")
+    print(f"  Points < -75 dBm   : {stats['count_below_75']} ({stats['pct_below_75']:.0f}%)")
+
+
+def measurement_stats(measurements: List[dict]) -> dict:
+    valid = [m for m in measurements if m["rssi_avg_dbm"] is not None]
+    if not valid:
+        return {
+            "valid_count": 0,
+            "rssi_avg_dbm": None,
+            "rssi_min_dbm": None,
+            "count_below_67": 0,
+            "count_below_70": 0,
+            "count_below_75": 0,
+            "pct_below_67": 0.0,
+            "pct_below_70": 0.0,
+            "pct_below_75": 0.0,
+        }
     rssi_vals = [m["rssi_avg_dbm"] for m in valid]
     avg = sum(rssi_vals) / len(rssi_vals)
     worst = min(rssi_vals)
@@ -288,13 +312,61 @@ def print_stats(measurements: List[dict], session_id: str):
     c67 = sum(1 for v in rssi_vals if v < -67)
     c70 = sum(1 for v in rssi_vals if v < -70)
     c75 = sum(1 for v in rssi_vals if v < -75)
-    print(f"\n=== Stats for session '{session_id}' ===")
-    print(f"  Total valid points : {count}")
-    print(f"  Average RSSI       : {avg:.1f} dBm")
-    print(f"  Worst RSSI         : {worst:.1f} dBm")
-    print(f"  Points < -67 dBm   : {c67} ({100*c67/count:.0f}%)")
-    print(f"  Points < -70 dBm   : {c70} ({100*c70/count:.0f}%)")
-    print(f"  Points < -75 dBm   : {c75} ({100*c75/count:.0f}%)")
+    return {
+        "valid_count": count,
+        "rssi_avg_dbm": avg,
+        "rssi_min_dbm": worst,
+        "count_below_67": c67,
+        "count_below_70": c70,
+        "count_below_75": c75,
+        "pct_below_67": 100 * c67 / count,
+        "pct_below_70": 100 * c70 / count,
+        "pct_below_75": 100 * c75 / count,
+    }
+
+
+def run_heatmap_generation(
+    project_dir: Path,
+    session_id: str,
+    output_dir: Path,
+    weak_threshold: float = -70.0,
+) -> dict:
+    paths = project_paths(project_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    session_dir = paths["survey_sessions_dir"] / session_id
+    summary_csv = session_dir / "measurements_summary.csv"
+
+    measurements = _load_measurements(summary_csv, session_id=session_id)
+    rooms = _load_rooms(paths["rooms_json"])
+    routers = _load_routers(paths["router_positions_json"])
+
+    if not measurements:
+        raise ValueError("No measurements found for that session.")
+
+    img = Image.open(paths["floorplan_png"]).convert("RGB")
+    img_arr = np.array(img)
+
+    outputs = {
+        "points": output_dir / f"{session_id}_points.png",
+        "heatmap": output_dir / f"{session_id}_heatmap.png",
+        "weak_zones": output_dir / f"{session_id}_weak_zones.png",
+    }
+    generate_survey_points(measurements, img_arr, rooms, routers, outputs["points"])
+    generate_heatmap(measurements, img_arr, rooms, routers, outputs["heatmap"])
+    generate_weak_zones(
+        measurements,
+        img_arr,
+        rooms,
+        routers,
+        outputs["weak_zones"],
+        threshold_dbm=weak_threshold,
+    )
+    return {
+        "session_id": session_id,
+        "outputs": outputs,
+        "stats": measurement_stats(measurements),
+    }
 
 
 def main():
@@ -306,34 +378,27 @@ def main():
                         help="dBm threshold for weak-zones layer")
     args = parser.parse_args()
 
-    project_dir = Path(args.project)
-    paths = project_paths(project_dir)
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    session_dir = paths["survey_sessions_dir"] / args.session
-    summary_csv = session_dir / "measurements_summary.csv"
-
-    measurements = _load_measurements(summary_csv, session_id=args.session)
-    rooms = _load_rooms(paths["rooms_json"])
-    routers = _load_routers(paths["router_positions_json"])
-
-    if not measurements:
-        print("No measurements found for that session.")
+    try:
+        result = run_heatmap_generation(
+            Path(args.project),
+            args.session,
+            Path(args.output_dir),
+            weak_threshold=args.weak_threshold,
+        )
+    except ValueError as e:
+        print(str(e))
         sys.exit(1)
-
-    img = Image.open(paths["floorplan_png"]).convert("RGB")
-    img_arr = np.array(img)
-
-    prefix = f"{args.session}"
-    generate_survey_points(measurements, img_arr, rooms, routers,
-                           output_dir / f"{prefix}_points.png")
-    generate_heatmap(measurements, img_arr, rooms, routers,
-                     output_dir / f"{prefix}_heatmap.png")
-    generate_weak_zones(measurements, img_arr, rooms, routers,
-                        output_dir / f"{prefix}_weak_zones.png",
-                        threshold_dbm=args.weak_threshold)
-    print_stats(measurements, args.session)
+    stats = result["stats"]
+    print(f"\n=== Stats for session '{args.session}' ===")
+    if stats["valid_count"]:
+        print(f"  Total valid points : {stats['valid_count']}")
+        print(f"  Average RSSI       : {stats['rssi_avg_dbm']:.1f} dBm")
+        print(f"  Worst RSSI         : {stats['rssi_min_dbm']:.1f} dBm")
+        print(f"  Points < -67 dBm   : {stats['count_below_67']} ({stats['pct_below_67']:.0f}%)")
+        print(f"  Points < -70 dBm   : {stats['count_below_70']} ({stats['pct_below_70']:.0f}%)")
+        print(f"  Points < -75 dBm   : {stats['count_below_75']} ({stats['pct_below_75']:.0f}%)")
+    else:
+        print("No valid measurements.")
 
 
 if __name__ == "__main__":
