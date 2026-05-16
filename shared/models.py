@@ -12,6 +12,7 @@ class Sample:
     y_px: float
     room_id: str
     room_name: str
+    waypoint_id: str
     height_ft: float
     ssid: str
     bssid: str
@@ -21,6 +22,14 @@ class Sample:
     interface: str
     scan_backend: str
     sample_number: int
+    is_target_ap: bool = False
+    link_available: bool = False
+    noise_dbm: Optional[float] = None
+    snr_db: Optional[float] = None
+    tx_bitrate_mbps: Optional[float] = None
+    rx_bitrate_mbps: Optional[float] = None
+    tx_mcs: Optional[int] = None
+    rx_mcs: Optional[int] = None
     note: str = ""
 
     def to_dict(self) -> dict:
@@ -36,6 +45,7 @@ class ClickPoint:
     y_px: float
     room_id: str
     room_name: str
+    waypoint_id: str
     height_ft: float
     timestamp: str
 
@@ -79,6 +89,7 @@ class ProjectConfig:
     default_interface: str
     units: str
     collection_mode: str
+    scan_backend: str = "iw"
     paths: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:

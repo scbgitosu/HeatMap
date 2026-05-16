@@ -1,5 +1,5 @@
 """
-Wi-Fi scanning backend: nmcli (primary), iw (fallback).
+Wi-Fi scanning backend: iw (primary), nmcli (fallback).
 
 CLI usage:
     python3 hp_collector/wifi_scan.py --interface wlan1 --ssid "MySSID" --samples 10
@@ -228,9 +228,6 @@ def scan_iw(
     """
     Run iw Wi-Fi scan (may need sudo). Returns list of raw AP dicts.
     """
-    logger.warning(
-        "Falling back to iw scan — this may require sudo and takes longer."
-    )
     cmd = ["sudo", "iw", "dev", interface, "scan"]
     try:
         out = subprocess.check_output(cmd, text=True, stderr=subprocess.PIPE, timeout=30)
@@ -268,6 +265,56 @@ def scan_iw(
     return results
 
 
+def _parse_bitrate(line: str) -> Optional[float]:
+    m = re.search(r"(\d+(?:\.\d+)?)\s+MBit/s", line, re.IGNORECASE)
+    return float(m.group(1)) if m else None
+
+
+def _parse_mcs(line: str) -> Optional[int]:
+    m = re.search(r"(?:VHT-|HE-)?MCS\s+(\d+)", line, re.IGNORECASE)
+    return int(m.group(1)) if m else None
+
+
+def link_iw(interface: str) -> dict:
+    """Return negotiated iw link stats when the interface is associated."""
+    cmd = ["iw", "dev", interface, "link"]
+    try:
+        out = subprocess.check_output(cmd, text=True, stderr=subprocess.PIPE, timeout=10)
+    except FileNotFoundError:
+        raise RuntimeError("iw not found")
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"iw link error: {e.stderr.strip()}")
+
+    if "Not connected." in out:
+        return {"link_available": False}
+
+    stats = {"link_available": True}
+    for raw_line in out.splitlines():
+        line = raw_line.strip()
+        if line.startswith("Connected to"):
+            parts = line.split()
+            if len(parts) >= 3:
+                stats["connected_bssid"] = parts[2]
+        elif line.startswith("signal:"):
+            m = re.search(r"(-?\d+)", line)
+            if m:
+                stats["signal_dbm"] = float(m.group(1))
+        elif line.startswith("noise:"):
+            m = re.search(r"(-?\d+)", line)
+            if m:
+                stats["noise_dbm"] = float(m.group(1))
+        elif line.lower().startswith("tx bitrate:"):
+            stats["tx_bitrate_mbps"] = _parse_bitrate(line)
+            stats["tx_mcs"] = _parse_mcs(line)
+        elif line.lower().startswith("rx bitrate:"):
+            stats["rx_bitrate_mbps"] = _parse_bitrate(line)
+            stats["rx_mcs"] = _parse_mcs(line)
+
+    if stats.get("signal_dbm") is not None and stats.get("noise_dbm") is not None:
+        stats["snr_db"] = stats["signal_dbm"] - stats["noise_dbm"]
+    return stats
+
+
 def _maybe_append(ap: dict, ssid_filter, bssid_filter, results: list):
     if ssid_filter and ap.get("ssid") != ssid_filter:
         return
@@ -280,17 +327,46 @@ def scan(
     interface: str,
     ssid: Optional[str] = None,
     bssid: Optional[str] = None,
-    backend: str = "auto",
+    backend: str = "iw",
 ) -> List[dict]:
-    """Scan using nmcli (or iw fallback). Returns list of AP dicts."""
+    """Scan using iw by default, falling back to nmcli only in auto mode."""
+    if backend in ("iw", "auto"):
+        try:
+            return scan_iw(interface, ssid, bssid), "iw"
+        except RuntimeError as e:
+            if backend == "iw":
+                raise
+            logger.warning(f"iw failed ({e}); trying nmcli")
     if backend in ("nmcli", "auto"):
         try:
             return scan_nmcli(interface, ssid, bssid), "nmcli"
         except RuntimeError as e:
             if backend == "nmcli":
                 raise
-            logger.warning(f"nmcli failed ({e}); trying iw")
-    return scan_iw(interface, ssid, bssid), "iw"
+            raise RuntimeError(f"iw and nmcli failed; last nmcli error: {e}")
+    raise RuntimeError(f"Unknown scan backend: {backend}")
+
+
+def _is_target_ap(ap: dict, target_ssid: str, target_bssid: Optional[str]) -> bool:
+    if ap.get("ssid") != target_ssid:
+        return False
+    if target_bssid:
+        return ap.get("bssid", "").upper() == target_bssid.upper()
+    return True
+
+
+def _mean(values: list) -> Optional[float]:
+    clean = [v for v in values if v is not None]
+    if not clean:
+        return None
+    return sum(clean) / len(clean)
+
+
+def _mode_int(values: list) -> Optional[int]:
+    clean = [v for v in values if v is not None]
+    if not clean:
+        return None
+    return max(set(clean), key=clean.count)
 
 
 def collect_samples(
@@ -300,6 +376,7 @@ def collect_samples(
     samples: int = 10,
     delay_s: float = 0.5,
     click_context: Optional[dict] = None,
+    backend: str = "iw",
 ) -> List[Sample]:
     """
     Run `samples` scans and return all Sample records (one per BSSID per scan).
@@ -315,14 +392,22 @@ def collect_samples(
             "y_px": 0,
             "room_id": "unknown",
             "room_name": "unknown",
+            "waypoint_id": "",
             "height_ft": 0,
         }
 
     all_samples = []
     for i in range(1, samples + 1):
         ts = now_iso()
+        link_stats = {}
         try:
-            aps, backend_used = scan(interface, ssid, bssid)
+            link_stats = link_iw(interface)
+        except RuntimeError as e:
+            logger.debug(f"iw link unavailable: {e}")
+
+        try:
+            # Keep all BSS rows so summary can calculate neighbor interference.
+            aps, backend_used = scan(interface, backend=backend)
         except RuntimeError as e:
             logger.error(f"Scan {i} failed: {e}")
             all_samples.append(Sample(
@@ -334,6 +419,7 @@ def collect_samples(
                 y_px=click_context["y_px"],
                 room_id=click_context["room_id"],
                 room_name=click_context["room_name"],
+                waypoint_id=click_context.get("waypoint_id", ""),
                 height_ft=click_context["height_ft"],
                 ssid=ssid,
                 bssid=bssid or "",
@@ -343,6 +429,13 @@ def collect_samples(
                 interface=interface,
                 scan_backend="error",
                 sample_number=i,
+                link_available=bool(link_stats.get("link_available")),
+                noise_dbm=link_stats.get("noise_dbm"),
+                snr_db=link_stats.get("snr_db"),
+                tx_bitrate_mbps=link_stats.get("tx_bitrate_mbps"),
+                rx_bitrate_mbps=link_stats.get("rx_bitrate_mbps"),
+                tx_mcs=link_stats.get("tx_mcs"),
+                rx_mcs=link_stats.get("rx_mcs"),
                 note=str(e),
             ))
             if i < samples:
@@ -359,6 +452,7 @@ def collect_samples(
                 y_px=click_context["y_px"],
                 room_id=click_context["room_id"],
                 room_name=click_context["room_name"],
+                waypoint_id=click_context.get("waypoint_id", ""),
                 height_ft=click_context["height_ft"],
                 ssid=ssid,
                 bssid=bssid or "",
@@ -368,10 +462,18 @@ def collect_samples(
                 interface=interface,
                 scan_backend=backend_used,
                 sample_number=i,
+                link_available=bool(link_stats.get("link_available")),
+                noise_dbm=link_stats.get("noise_dbm"),
+                snr_db=link_stats.get("snr_db"),
+                tx_bitrate_mbps=link_stats.get("tx_bitrate_mbps"),
+                rx_bitrate_mbps=link_stats.get("rx_bitrate_mbps"),
+                tx_mcs=link_stats.get("tx_mcs"),
+                rx_mcs=link_stats.get("rx_mcs"),
                 note="network_not_found",
             ))
         else:
             for ap in aps:
+                is_target = _is_target_ap(ap, ssid, bssid)
                 all_samples.append(Sample(
                     timestamp=ts,
                     session_id=click_context["session_id"],
@@ -381,6 +483,7 @@ def collect_samples(
                     y_px=click_context["y_px"],
                     room_id=click_context["room_id"],
                     room_name=click_context["room_name"],
+                    waypoint_id=click_context.get("waypoint_id", ""),
                     height_ft=click_context["height_ft"],
                     ssid=ap.get("ssid", ssid),
                     bssid=ap.get("bssid", ""),
@@ -390,6 +493,14 @@ def collect_samples(
                     interface=interface,
                     scan_backend=backend_used,
                     sample_number=i,
+                    is_target_ap=is_target,
+                    link_available=bool(link_stats.get("link_available")),
+                    noise_dbm=link_stats.get("noise_dbm"),
+                    snr_db=link_stats.get("snr_db"),
+                    tx_bitrate_mbps=link_stats.get("tx_bitrate_mbps"),
+                    rx_bitrate_mbps=link_stats.get("rx_bitrate_mbps"),
+                    tx_mcs=link_stats.get("tx_mcs"),
+                    rx_mcs=link_stats.get("rx_mcs"),
                     note="",
                 ))
 
@@ -408,14 +519,22 @@ def summarize(
     Summarize a list of Sample records for one click point.
     Returns a dict matching SUMMARY_COLUMNS.
     """
+    import math
     import statistics
 
-    filtered = [s for s in samples if s.ssid == target_ssid]
+    filtered = [s for s in samples if s.is_target_ap or s.ssid == target_ssid]
     if target_bssid:
         filtered = [s for s in filtered if s.bssid.upper() == target_bssid.upper()]
 
     valid = [s for s in filtered if s.rssi_dbm is not None]
-    missing = len([s for s in samples if s.rssi_dbm is None])
+    by_round: dict[int, List[Sample]] = {}
+    for sample in samples:
+        by_round.setdefault(sample.sample_number, []).append(sample)
+    missing = sum(
+        1
+        for group in by_round.values()
+        if not any(s.rssi_dbm is not None and (s.is_target_ap or s.ssid == target_ssid) for s in group)
+    )
 
     if not valid:
         rssi_avg = rssi_min = rssi_max = rssi_std = None
@@ -439,6 +558,54 @@ def summarize(
         freq = last.frequency_mhz
         channel = last.channel
 
+    round_link_rows = []
+    for group in by_round.values():
+        link_row = next((s for s in group if s.link_available), None)
+        if link_row:
+            round_link_rows.append(link_row)
+
+    noise_avg = _mean([s.noise_dbm for s in round_link_rows])
+    snr_avg = _mean([s.snr_db for s in round_link_rows])
+    snr_values = [s.snr_db for s in round_link_rows if s.snr_db is not None]
+    snr_min = min(snr_values) if snr_values else None
+    tx_avg = _mean([s.tx_bitrate_mbps for s in round_link_rows])
+    rx_avg = _mean([s.rx_bitrate_mbps for s in round_link_rows])
+    tx_mcs_mode = _mode_int([s.tx_mcs for s in round_link_rows])
+    rx_mcs_mode = _mode_int([s.rx_mcs for s in round_link_rows])
+
+    target_freq = freq
+    neighbors = [
+        s
+        for s in samples
+        if not (s.is_target_ap or (target_bssid and s.bssid.upper() == target_bssid.upper()))
+        and s.rssi_dbm is not None
+        and s.rssi_dbm >= -80
+    ]
+    same_channel_by_bssid = {
+        s.bssid: s
+        for s in neighbors
+        if channel is not None and s.channel == channel
+    }
+    same_channel = list(same_channel_by_bssid.values())
+    adjacent_by_bssid = {}
+    for s in neighbors:
+        if channel is None or s.channel is None or s.channel == channel:
+            continue
+        if target_freq and target_freq < 3000:
+            if abs(s.channel - channel) <= 1:
+                adjacent_by_bssid[s.bssid] = s
+        elif target_freq and s.frequency_mhz:
+            if abs(s.frequency_mhz - target_freq) <= 40:
+                adjacent_by_bssid[s.bssid] = s
+    adjacent = list(adjacent_by_bssid.values())
+
+    if same_channel:
+        mw_sum = sum(10 ** (s.rssi_dbm / 10) for s in same_channel)
+        neighbor_rssi_sum = 10 * math.log10(mw_sum) if mw_sum > 0 else None
+    else:
+        neighbor_rssi_sum = None
+    channel_utilization_proxy = min(100, len(same_channel) * 5 + len(adjacent) * 2)
+
     ctx = samples[0] if samples else None
     return {
         "timestamp_start": samples[0].timestamp if samples else now_iso(),
@@ -450,6 +617,7 @@ def summarize(
         "y_px": ctx.y_px if ctx else 0,
         "room_id": ctx.room_id if ctx else "",
         "room_name": ctx.room_name if ctx else "",
+        "waypoint_id": ctx.waypoint_id if ctx else "",
         "height_ft": ctx.height_ft if ctx else 0,
         "target_ssid": target_ssid,
         "target_bssid": target_bssid or "",
@@ -461,6 +629,18 @@ def summarize(
         "rssi_min_dbm": round(rssi_min, 2) if rssi_min is not None else None,
         "rssi_max_dbm": round(rssi_max, 2) if rssi_max is not None else None,
         "rssi_std_db": round(rssi_std, 3) if rssi_std is not None else None,
+        "noise_avg_dbm": round(noise_avg, 2) if noise_avg is not None else None,
+        "snr_avg_db": round(snr_avg, 2) if snr_avg is not None else None,
+        "snr_min_db": round(snr_min, 2) if snr_min is not None else None,
+        "tx_bitrate_avg_mbps": round(tx_avg, 2) if tx_avg is not None else None,
+        "rx_bitrate_avg_mbps": round(rx_avg, 2) if rx_avg is not None else None,
+        "tx_mcs_mode": tx_mcs_mode,
+        "rx_mcs_mode": rx_mcs_mode,
+        "neighbor_count_same_channel": len(same_channel),
+        "neighbor_count_adjacent": len(adjacent),
+        "neighbor_rssi_sum_dbm": round(neighbor_rssi_sum, 2) if neighbor_rssi_sum is not None else None,
+        "channel_utilization_proxy": channel_utilization_proxy,
+        "link_available": bool(round_link_rows),
         "missing_sample_count": missing,
         "note": "",
     }
@@ -488,7 +668,7 @@ def main():
     parser.add_argument("--bssid", default=None, help="Optional target BSSID filter")
     parser.add_argument("--samples", type=int, default=10, help="Number of scans")
     parser.add_argument("--delay", type=float, default=0.5, help="Delay between scans (s)")
-    parser.add_argument("--backend", choices=["auto", "nmcli", "iw"], default="auto")
+    parser.add_argument("--backend", choices=["auto", "nmcli", "iw"], default="iw")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -503,6 +683,7 @@ def main():
         bssid=args.bssid,
         samples=args.samples,
         delay_s=args.delay,
+        backend=args.backend,
     )
     summary = summarize(samples, args.ssid, args.bssid)
     _pretty_print(samples, summary)

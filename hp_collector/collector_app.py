@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import sys
 from pathlib import Path
@@ -54,7 +55,7 @@ from PyQt5.QtGui import (
     QColor, QFont, QPainter, QPen, QPixmap, QBrush,
 )
 from PyQt5.QtWidgets import (
-    QApplication, QComboBox, QDialog, QDialogButtonBox,
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QGraphicsEllipseItem, QGraphicsPixmapItem,
     QGraphicsScene, QGraphicsTextItem, QGraphicsView,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
@@ -95,7 +96,7 @@ class ScanWorker(QThread):
     finished = pyqtSignal(list, dict)  # samples, summary
     error = pyqtSignal(str)
 
-    def __init__(self, interface, ssid, bssid, samples, delay, click_context):
+    def __init__(self, interface, ssid, bssid, samples, delay, click_context, backend):
         super().__init__()
         self.interface = interface
         self.ssid = ssid
@@ -103,6 +104,7 @@ class ScanWorker(QThread):
         self.samples = samples
         self.delay = delay
         self.click_context = click_context
+        self.backend = backend
 
     def run(self):
         try:
@@ -113,6 +115,7 @@ class ScanWorker(QThread):
                 samples=self.samples,
                 delay_s=self.delay,
                 click_context=self.click_context,
+                backend=self.backend,
             )
             summary = summarize(samples, self.ssid, self.bssid)
             self.finished.emit(samples, summary)
@@ -167,6 +170,8 @@ class CollectorWindow(QMainWindow):
         self.project_dir = Path(project_dir)
         self.config, self.rooms, self.routers, self.metadata = load_project(project_dir)
         self.paths = project_paths(project_dir)
+        self.waypoints = self._load_walk_waypoints()
+        self._used_waypoint_ids: set[str] = set()
 
         self._click_dots: List[dict] = []  # {dot, summary_row}
         self._summary_rows: List[dict] = []
@@ -241,6 +246,14 @@ class CollectorWindow(QMainWindow):
         if not ifaces:
             self.iface_combo.addItem("wlan0")
         gl4.addWidget(self.iface_combo)
+        gl4.addWidget(label("Scan backend:"))
+        self.backend_combo = QComboBox()
+        for backend in ("iw", "auto", "nmcli"):
+            self.backend_combo.addItem(backend)
+        backend_default = getattr(self.config, "scan_backend", "iw") or "iw"
+        if backend_default in ("iw", "auto", "nmcli"):
+            self.backend_combo.setCurrentText(backend_default)
+        gl4.addWidget(self.backend_combo)
         self._update_iface_combo_style()
         self.recheck_btn = QPushButton("Re-check Wi-Fi")
         self.recheck_btn.clicked.connect(self._on_recheck_wifi)
@@ -261,6 +274,10 @@ class CollectorWindow(QMainWindow):
         self.height_spin.setValue(4.0)
         self.height_spin.setSingleStep(0.5)
         gl5.addWidget(self.height_spin)
+        self.guided_walk_checkbox = QCheckBox("Guided walk waypoint snap")
+        self.guided_walk_checkbox.setEnabled(bool(self.waypoints))
+        self.guided_walk_checkbox.setChecked(bool(self.waypoints))
+        gl5.addWidget(self.guided_walk_checkbox)
         sidebar_layout.addWidget(grp5)
 
         # Status banner
@@ -308,7 +325,8 @@ class CollectorWindow(QMainWindow):
         iface = self.iface_combo.currentText().strip()
         ssid = self.ssid_edit.text().strip()
         bssid = self.bssid_edit.text().strip() or None
-        return iface, ssid, bssid
+        backend = self.backend_combo.currentText().strip() or "iw"
+        return iface, ssid, bssid, backend
 
     def _update_iface_combo_style(self):
         iface = self.iface_combo.currentText().strip()
@@ -335,8 +353,8 @@ class CollectorWindow(QMainWindow):
         )
 
     def _run_preflight(self, show_dialog_on_fail: bool = False) -> PreflightResult:
-        iface, ssid, bssid = self._wifi_settings()
-        result = run_preflight(iface, ssid, bssid)
+        iface, ssid, bssid, backend = self._wifi_settings()
+        result = run_preflight(iface, ssid, bssid, backend=backend)
         self._apply_preflight_state(result)
         if not result.ok and show_dialog_on_fail:
             self._show_preflight_dialog(result)
@@ -406,6 +424,42 @@ class CollectorWindow(QMainWindow):
         session_dir = self.paths["survey_sessions_dir"] / session_id
         return DataWriter(session_dir)
 
+    def _load_walk_waypoints(self) -> List[dict]:
+        path = self.paths.get("walk_waypoints_json")
+        if not path or not path.exists():
+            return []
+        try:
+            with open(path, encoding="utf-8") as f:
+                return sorted(json.load(f), key=lambda w: int(w.get("order", 0)))
+        except Exception:
+            return []
+
+    def _snap_to_waypoint(self, x: float, y: float, tolerance_px: float = 40.0) -> tuple[float, float, str, str]:
+        if not self.waypoints or not self.guided_walk_checkbox.isChecked():
+            return x, y, "", ""
+        best = None
+        best_dist = None
+        for waypoint in self.waypoints:
+            waypoint_id = waypoint.get("waypoint_id", "")
+            if waypoint_id in self._used_waypoint_ids:
+                continue
+            dx = float(waypoint.get("x_px", 0)) - x
+            dy = float(waypoint.get("y_px", 0)) - y
+            dist = (dx * dx + dy * dy) ** 0.5
+            if best_dist is None or dist < best_dist:
+                best = waypoint
+                best_dist = dist
+        if not best or best_dist is None or best_dist > tolerance_px:
+            return x, y, "", ""
+        waypoint_id = best.get("waypoint_id", "")
+        self._used_waypoint_ids.add(waypoint_id)
+        return (
+            float(best.get("x_px", x)),
+            float(best.get("y_px", y)),
+            waypoint_id,
+            best.get("label", ""),
+        )
+
     def _load_existing_points(self):
         """Redraw survey points from existing summary CSV on launch."""
         try:
@@ -433,6 +487,7 @@ class CollectorWindow(QMainWindow):
         if self._scan_worker and self._scan_worker.isRunning():
             return
 
+        x, y, waypoint_id, waypoint_label = self._snap_to_waypoint(x, y)
         session_id = self.session_edit.text().strip() or "session"
         dw = self._data_writer()
         click_id = dw.next_click_id(session_id)
@@ -452,8 +507,11 @@ class CollectorWindow(QMainWindow):
             "y_px": y,
             "room_id": room_id,
             "room_name": room_name,
+            "waypoint_id": waypoint_id,
             "height_ft": height,
         }
+        if waypoint_id:
+            click_context["note"] = f"waypoint:{waypoint_id}:{waypoint_label}"
 
         # Draw pending dot immediately
         self._pending_dot = self._add_dot(x, y, rssi=None, confirmed=False)
@@ -464,10 +522,11 @@ class CollectorWindow(QMainWindow):
         iface = self.iface_combo.currentText()
         ssid = self.ssid_edit.text().strip()
         bssid = self.bssid_edit.text().strip() or None
+        backend = self.backend_combo.currentText().strip() or "iw"
         n_samples = self.samples_spin.value()
 
         self._current_context = click_context
-        self._scan_worker = ScanWorker(iface, ssid, bssid, n_samples, 0.5, click_context)
+        self._scan_worker = ScanWorker(iface, ssid, bssid, n_samples, 0.5, click_context, backend)
         self._scan_worker.finished.connect(self._on_scan_done)
         self._scan_worker.error.connect(self._on_scan_error)
         self._scan_worker.start()
@@ -523,12 +582,19 @@ class CollectorWindow(QMainWindow):
 
         rssi = summary.get("rssi_avg_dbm")
         rssi_str = f"{rssi:.1f} dBm" if rssi is not None else "N/A"
+        snr = summary.get("snr_avg_db")
+        tx = summary.get("tx_bitrate_avg_mbps")
+        last_parts = [rssi_str]
+        if snr is not None:
+            last_parts.append(f"SNR {snr:.1f} dB")
+        if tx is not None:
+            last_parts.append(f"TX {tx:.0f} Mbps")
         if outcome.status == "partial":
             self._set_status("warning", summary["note"])
         else:
             self._set_status("saved")
         self.setWindowTitle(
-            f"Wi-Fi Collector — {self.config.project_name} | Last: {rssi_str}"
+            f"Wi-Fi Collector — {self.config.project_name} | Last: {' / '.join(last_parts)}"
         )
 
     def _on_scan_error(self, msg: str):

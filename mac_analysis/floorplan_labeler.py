@@ -158,7 +158,17 @@ def main():
         with open(paths["router_positions_json"], encoding="utf-8") as f:
             existing_routers = json.load(f)
 
-    tab_rooms, tab_routers, tab_config = st.tabs(["Rooms", "Router Positions", "Project Config"])
+    existing_waypoints = []
+    if paths["walk_waypoints_json"].exists():
+        with open(paths["walk_waypoints_json"], encoding="utf-8") as f:
+            existing_waypoints = json.load(f)
+
+    tab_rooms, tab_routers, tab_walk, tab_config = st.tabs([
+        "Rooms",
+        "Router Positions",
+        "Walk Template",
+        "Project Config",
+    ])
 
     # ---- Rooms tab ----
     with tab_rooms:
@@ -359,6 +369,74 @@ def main():
             st.subheader("Currently saved router_positions.json")
             st.json(existing_routers)
 
+    # ---- Walk template tab ----
+    with tab_walk:
+        st.subheader("Create matched walk waypoints")
+        st.info(
+            "Select Point mode, then click survey locations in the order you want to walk them. "
+            "Using the same waypoints across router trials makes session comparisons much stronger."
+        )
+        waypoint_canvas = st_canvas(
+            fill_color="rgba(0, 160, 255, 0.7)",
+            stroke_width=2,
+            stroke_color="#00A0FF",
+            background_image=img,
+            update_streamlit=True,
+            width=canvas_w,
+            height=canvas_h,
+            drawing_mode="point",
+            point_display_radius=7,
+            key="walk_waypoints_canvas",
+        )
+
+        waypoint_points = []
+        if waypoint_canvas.json_data and waypoint_canvas.json_data.get("objects"):
+            for obj in waypoint_canvas.json_data["objects"]:
+                if obj.get("type") == "circle":
+                    wx = float(obj.get("left", 0)) * sx
+                    wy = float(obj.get("top", 0)) * sy
+                    waypoint_points.append([wx, wy])
+
+        display_waypoints = waypoint_points or [
+            [float(w.get("x_px", 0)), float(w.get("y_px", 0))]
+            for w in existing_waypoints
+        ]
+        st.write(f"**{len(display_waypoints)} waypoint(s)**")
+        if display_waypoints:
+            waypoint_rows = []
+            for i, (px, py) in enumerate(display_waypoints):
+                existing = existing_waypoints[i] if i < len(existing_waypoints) else {}
+                col1, col2 = st.columns(2)
+                with col1:
+                    waypoint_id = st.text_input(
+                        f"Waypoint ID #{i + 1}",
+                        value=existing.get("waypoint_id", f"wp{i + 1:02d}"),
+                        key=f"waypoint_id_{i}",
+                    )
+                with col2:
+                    label_value = st.text_input(
+                        f"Label #{i + 1}",
+                        value=existing.get("label", ""),
+                        key=f"waypoint_label_{i}",
+                    )
+                waypoint_rows.append({
+                    "waypoint_id": waypoint_id,
+                    "order": i + 1,
+                    "x_px": px,
+                    "y_px": py,
+                    "label": label_value,
+                })
+
+            if st.button("Save walk_waypoints.json", type="primary"):
+                with open(paths["walk_waypoints_json"], "w", encoding="utf-8") as f:
+                    json.dump(waypoint_rows, f, indent=2)
+                st.success(f"Saved {len(waypoint_rows)} waypoints to `{paths['walk_waypoints_json']}`")
+                st.json(waypoint_rows)
+
+        if existing_waypoints:
+            st.subheader("Currently saved walk_waypoints.json")
+            st.json(existing_waypoints)
+
     # ---- Config tab ----
     with tab_config:
         st.subheader("Project configuration")
@@ -392,6 +470,12 @@ def main():
                 ["feet", "meters"],
                 index=0 if existing_cfg.get("units", "feet") == "feet" else 1,
             )
+            scan_backend = st.selectbox(
+                "Scan backend",
+                ["iw", "auto", "nmcli"],
+                index=["iw", "auto", "nmcli"].index(existing_cfg.get("scan_backend", "iw"))
+                if existing_cfg.get("scan_backend", "iw") in ["iw", "auto", "nmcli"] else 0,
+            )
 
         if st.button("Save project_config.json", type="primary"):
             cfg = {
@@ -401,10 +485,12 @@ def main():
                 "default_interface": default_iface,
                 "units": units,
                 "collection_mode": "click_to_scan",
+                "scan_backend": scan_backend,
                 "paths": {
                     "floorplan_png": str(paths["floorplan_png"]),
                     "rooms_json": str(paths["rooms_json"]),
                     "router_positions_json": str(paths["router_positions_json"]),
+                    "walk_waypoints_json": str(paths["walk_waypoints_json"]),
                     "survey_sessions_dir": str(paths["survey_sessions_dir"]),
                 },
                 "updated_at": now_iso(),

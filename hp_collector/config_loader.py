@@ -50,6 +50,7 @@ def load_project(project_dir: Path) -> tuple:
         default_interface=cfg_data.get("default_interface", ""),
         units=cfg_data.get("units", "feet"),
         collection_mode=cfg_data.get("collection_mode", "click_to_scan"),
+        scan_backend=cfg_data.get("scan_backend", "iw"),
         paths=cfg_data.get("paths", {}),
     )
 

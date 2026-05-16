@@ -72,6 +72,7 @@ def run_preflight(
     interface: str,
     ssid: str,
     bssid: Optional[str] = None,
+    backend: str = "iw",
 ) -> PreflightResult:
     """Run all preflight checks. Returns ok=False if surveying should be blocked."""
     issues: List[str] = []
@@ -110,16 +111,21 @@ def run_preflight(
         return PreflightResult(ok=False, issues=issues, hints=_dedupe(hints))
 
     try:
-        aps, backend = scan(interface, ssid.strip(), bssid or None)
+        aps, backend_used = scan(interface, ssid.strip(), bssid or None, backend=backend)
     except RuntimeError as e:
         issues.append(f"Scan failed ({e}).")
         hints.append(f"sudo ip link set {interface} up")
         hints.append("sudo rfkill unblock wifi")
-        hints.append(f"python3 hp_collector/wifi_scan.py --interface {interface} --ssid \"{ssid}\" --samples 3")
+        if backend in ("iw", "auto"):
+            hints.append(f"sudo iw dev {interface} scan >/dev/null")
+            hints.append(
+                "For unattended surveys, configure passwordless sudo for the iw binary."
+            )
+        hints.append(f"python3 hp_collector/wifi_scan.py --interface {interface} --ssid \"{ssid}\" --samples 3 --backend {backend}")
         return PreflightResult(ok=False, issues=issues, hints=_dedupe(hints))
 
     if not aps:
-        issues.append(f"Scan succeeded via {backend} but target SSID '{ssid}' was not found.")
+        issues.append(f"Scan succeeded via {backend_used} but target SSID '{ssid}' was not found.")
         hints.append("Confirm the router is on and broadcasting the expected SSID.")
         hints.append("Check 2.4 vs 5 GHz — the adapter may not see all bands.")
         if bssid:
@@ -145,6 +151,8 @@ def main() -> int:
     parser.add_argument("--interface", default=None, help="Override Wi-Fi interface")
     parser.add_argument("--ssid", default=None, help="Override target SSID")
     parser.add_argument("--bssid", default=None, help="Override target BSSID")
+    parser.add_argument("--backend", choices=["iw", "auto", "nmcli"], default=None,
+                        help="Override scan backend")
     args = parser.parse_args()
 
     project_dir = Path(args.project)
@@ -153,13 +161,14 @@ def main() -> int:
     interface = args.interface or config.default_interface
     ssid = args.ssid or config.target_ssid
     bssid = args.bssid if args.bssid is not None else (config.target_bssid or None)
+    backend = args.backend or getattr(config, "scan_backend", "iw")
 
     if not interface:
         print("ERROR: No Wi-Fi interface configured.", file=sys.stderr)
         print("Set default_interface in project_config.json or pass --interface.", file=sys.stderr)
         return 1
 
-    result = run_preflight(interface, ssid, bssid or None)
+    result = run_preflight(interface, ssid, bssid or None, backend=backend)
     print(result.message())
     return 0 if result.ok else 1
 

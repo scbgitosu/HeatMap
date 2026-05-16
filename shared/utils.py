@@ -49,5 +49,16 @@ def project_paths(project_dir: Path) -> dict:
         "project_config": d / "project_config.json",
         "rooms_json": d / "rooms.json",
         "router_positions_json": d / "router_positions.json",
+        "walk_waypoints_json": d / "walk_waypoints.json",
         "survey_sessions_dir": d / "survey_sessions",
     }
+
+
+def px_to_ft(distance_px: float, metadata: dict) -> float:
+    """Convert image-pixel distance to feet using floorplan metadata scale."""
+    scale = metadata.get("scale_pixels_per_foot")
+    if not scale:
+        raise ValueError(
+            "Missing floorplan scale. Re-run floorplan_import.py and measure a known wall length."
+        )
+    return distance_px / float(scale)
