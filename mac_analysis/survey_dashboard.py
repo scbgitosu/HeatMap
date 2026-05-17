@@ -113,11 +113,16 @@ def _render_heatmaps(project_dir: Path, session_ids: list[str]):
         return
 
     session_id = _session_selector(session_ids, key="heatmap_session", multiselect=False)
-    weak_threshold = st.number_input("Weak threshold (dBm)", value=float(DEFAULT_WEAK_DBM), step=1.0)
+    weak_threshold = st.number_input(
+        "Weak threshold (dBm)",
+        value=float(DEFAULT_WEAK_DBM),
+        step=1.0,
+        key="heatmap_weak_threshold",
+    )
     output_dir = _project_output_dir(project_dir) / "heatmaps"
     st.caption(f"Outputs: `{output_dir}`")
 
-    if st.button("Generate Heatmaps", type="primary"):
+    if st.button("Generate Heatmaps", type="primary", key="heatmap_generate_btn"):
         try:
             result = run_heatmap_generation(project_dir, session_id, output_dir, weak_threshold)
         except Exception as e:
@@ -140,13 +145,27 @@ def _render_comparison(project_dir: Path, session_ids: list[str]):
         return
 
     selected = _session_selector(session_ids, key="compare_sessions", multiselect=True)
-    good_threshold = st.number_input("Good threshold (dBm)", value=float(DEFAULT_GOOD_DBM), step=1.0)
-    weak_threshold = st.number_input("Weak threshold (dBm)", value=float(DEFAULT_WEAK_DBM), step=1.0)
-    export_heatmaps = st.checkbox("Also export per-session heatmaps", value=True)
+    good_threshold = st.number_input(
+        "Good threshold (dBm)",
+        value=float(DEFAULT_GOOD_DBM),
+        step=1.0,
+        key="compare_good_threshold",
+    )
+    weak_threshold = st.number_input(
+        "Weak threshold (dBm)",
+        value=float(DEFAULT_WEAK_DBM),
+        step=1.0,
+        key="compare_weak_threshold",
+    )
+    export_heatmaps = st.checkbox(
+        "Also export per-session heatmaps",
+        value=True,
+        key="compare_export_heatmaps",
+    )
     output_dir = _project_output_dir(project_dir) / "comparison"
     st.caption(f"Outputs: `{output_dir}`")
 
-    if st.button("Run Comparison", type="primary", disabled=len(selected) < 2):
+    if st.button("Run Comparison", type="primary", disabled=len(selected) < 2, key="compare_run_btn"):
         try:
             result = run_session_comparison(
                 project_dir,
@@ -184,15 +203,43 @@ def _render_optimizer(project_dir: Path, paths: dict, session_ids: list[str]):
         st.info("Three router-position trials are recommended for better path-loss fitting.")
 
     selected = _session_selector(session_ids, key="optimizer_sessions", multiselect=True)
-    candidate_step = st.number_input("Candidate grid step (px)", min_value=20, max_value=400, value=80, step=10)
-    receiver_step = st.number_input("Receiver grid step (px)", min_value=20, max_value=400, value=80, step=10)
-    top_k = st.number_input("Top candidates", min_value=1, max_value=20, value=5, step=1)
-    ap_height = st.number_input("Suggested AP height (ft)", min_value=0.0, max_value=20.0, value=4.0, step=0.5)
+    candidate_step = st.number_input(
+        "Candidate grid step (px)",
+        min_value=20,
+        max_value=400,
+        value=80,
+        step=10,
+        key="optimizer_candidate_step",
+    )
+    receiver_step = st.number_input(
+        "Receiver grid step (px)",
+        min_value=20,
+        max_value=400,
+        value=80,
+        step=10,
+        key="optimizer_receiver_step",
+    )
+    top_k = st.number_input(
+        "Top candidates",
+        min_value=1,
+        max_value=20,
+        value=5,
+        step=1,
+        key="optimizer_top_k",
+    )
+    ap_height = st.number_input(
+        "Suggested AP height (ft)",
+        min_value=0.0,
+        max_value=20.0,
+        value=4.0,
+        step=0.5,
+        key="optimizer_ap_height",
+    )
     output_dir = _project_output_dir(project_dir) / "placement"
     st.caption(f"Outputs: `{output_dir}`")
 
     disabled = not bool(metadata.get("scale_pixels_per_foot")) or not selected
-    if st.button("Run Placement Optimizer", type="primary", disabled=disabled):
+    if st.button("Run Placement Optimizer", type="primary", disabled=disabled, key="optimizer_run_btn"):
         try:
             result = optimize_placement(
                 project_dir,
