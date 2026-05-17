@@ -177,13 +177,14 @@ class CollectorWindow(QMainWindow):
         self._click_dots: List[dict] = []  # {dot, summary_row}
         self._summary_rows: List[dict] = []
         self._raw_rows: List[dict] = []
+        self._loaded_session_id: Optional[str] = None
         self._scan_worker: Optional[ScanWorker] = None
         self._pending_dot = None
         self._preflight_ok = False
 
         self.setWindowTitle(f"Wi-Fi Collector — {self.config.project_name}")
         self._build_ui()
-        self._load_existing_points()
+        self._reload_session()
         self._run_preflight(show_dialog_on_fail=True)
 
     def _build_ui(self):
@@ -214,8 +215,17 @@ class CollectorWindow(QMainWindow):
         grp2 = QGroupBox("Session")
         gl2 = QVBoxLayout(grp2)
         gl2.addWidget(label("Session name:"))
+        session_row = QHBoxLayout()
         self.session_edit = QLineEdit("baseline_current_router")
-        gl2.addWidget(self.session_edit)
+        session_row.addWidget(self.session_edit)
+        self.session_reload_btn = QPushButton("Load")
+        self.session_reload_btn.setToolTip(
+            "Reload measurement dots and walk progress for this session folder"
+        )
+        self.session_reload_btn.clicked.connect(self._reload_session)
+        session_row.addWidget(self.session_reload_btn)
+        gl2.addLayout(session_row)
+        self.session_edit.editingFinished.connect(self._on_session_name_changed)
         sidebar_layout.addWidget(grp2)
 
         # Router position
@@ -384,7 +394,7 @@ class CollectorWindow(QMainWindow):
         }
         bg, fg = colors.get(state, ("#fff", "#000"))
         labels = {
-            "ready": "Ready",
+            "ready": msg or "Ready",
             "wifi_ready": "Wi-Fi ready",
             "scanning": "Scanning…",
             "saved": "Saved",
@@ -568,8 +578,25 @@ class CollectorWindow(QMainWindow):
             waypoint.get("label", ""),
         )
 
-    def _load_existing_points(self):
-        """Redraw survey points from existing summary CSV on launch."""
+    def _current_session_id(self) -> str:
+        return self.session_edit.text().strip() or "session"
+
+    def _clear_session_display(self):
+        """Remove measurement dots and in-memory rows for the active session view."""
+        if self._pending_dot:
+            self.scene.removeItem(self._pending_dot)
+            self._pending_dot = None
+        for entry in self._click_dots:
+            self.scene.removeItem(entry["dot"])
+        self._click_dots = []
+        self._summary_rows = []
+        self._raw_rows = []
+        self._used_waypoint_ids = set()
+
+    def _reload_session(self):
+        """Switch the floorplan view to match the session name in the sidebar."""
+        session_id = self._current_session_id()
+        self._clear_session_display()
         try:
             dw = self._data_writer()
             rows = dw.load_summary_rows()
@@ -587,8 +614,33 @@ class CollectorWindow(QMainWindow):
                     pass
         except Exception:
             pass
+        self._loaded_session_id = session_id
         self._sync_used_waypoints()
         self._refresh_waypoint_overlays()
+        n = len(self._summary_rows)
+        if n:
+            self._set_status("ready", f"Loaded {n} point(s) — {session_id}")
+        else:
+            self._set_status("ready", f"New session — {session_id}")
+
+    def _on_session_name_changed(self):
+        session_id = self._current_session_id()
+        if session_id == self._loaded_session_id:
+            return
+        if self._scan_worker and self._scan_worker.isRunning():
+            QMessageBox.warning(
+                self,
+                "Scan in progress",
+                "Wait for the current scan to finish before changing session.",
+            )
+            if self._loaded_session_id:
+                self.session_edit.setText(self._loaded_session_id)
+            return
+        self._reload_session()
+
+    def _ensure_session_loaded(self):
+        if self._current_session_id() != self._loaded_session_id:
+            self._reload_session()
 
     def _on_click(self, x: float, y: float):
         if not self._preflight_ok:
@@ -597,8 +649,10 @@ class CollectorWindow(QMainWindow):
         if self._scan_worker and self._scan_worker.isRunning():
             return
 
+        self._ensure_session_loaded()
+
         x, y, waypoint_id, waypoint_label = self._snap_to_waypoint(x, y)
-        session_id = self.session_edit.text().strip() or "session"
+        session_id = self._current_session_id()
         dw = self._data_writer()
         click_id = dw.next_click_id(session_id)
 
