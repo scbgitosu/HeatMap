@@ -41,20 +41,13 @@ NORM = mcolors.BoundaryNorm(RSSI_BOUNDS, CMAP.N)
 
 
 def _load_measurements(summary_csv: Path, session_id: Optional[str] = None) -> List[dict]:
+    from shared.survey_metrics import load_measurements
+
     if not summary_csv.exists():
         raise FileNotFoundError(f"No measurements found at {summary_csv}")
-    rows = []
-    with open(summary_csv, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            if session_id and row.get("session_id") != session_id:
-                continue
-            try:
-                row["x_px"] = float(row["x_px"])
-                row["y_px"] = float(row["y_px"])
-                row["rssi_avg_dbm"] = float(row["rssi_avg_dbm"]) if row.get("rssi_avg_dbm") else None
-            except ValueError:
-                continue
-            rows.append(row)
+    rows = load_measurements(summary_csv, session_id=session_id)
+    if not rows:
+        raise FileNotFoundError(f"No measurements found at {summary_csv}")
     return rows
 
 

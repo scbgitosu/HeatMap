@@ -72,6 +72,8 @@ from hp_collector.wifi_scan import (
     list_wifi_interfaces,
     summarize,
 )
+from shared.session_cleanup import clean_session_folder, count_foreign_rows
+from shared.survey_metrics import load_measurements
 from shared.utils import generate_click_id, infer_room, now_iso, project_paths
 
 
@@ -224,6 +226,12 @@ class CollectorWindow(QMainWindow):
         )
         self.session_reload_btn.clicked.connect(self._reload_session)
         session_row.addWidget(self.session_reload_btn)
+        self.session_clean_btn = QPushButton("Clean")
+        self.session_clean_btn.setToolTip(
+            "Remove rows from other sessions and fix missing waypoint IDs"
+        )
+        self.session_clean_btn.clicked.connect(self._clean_session)
+        session_row.addWidget(self.session_clean_btn)
         gl2.addLayout(session_row)
         self.session_edit.editingFinished.connect(self._on_session_name_changed)
         sidebar_layout.addWidget(grp2)
@@ -593,14 +601,43 @@ class CollectorWindow(QMainWindow):
         self._raw_rows = []
         self._used_waypoint_ids = set()
 
+    def _clean_session(self):
+        session_id = self._current_session_id()
+        if self._scan_worker and self._scan_worker.isRunning():
+            QMessageBox.warning(self, "Scan in progress", "Wait for the current scan to finish.")
+            return
+        report = clean_session_folder(
+            self._data_writer().session_dir,
+            waypoints_json=self.paths.get("walk_waypoints_json"),
+        )
+        QMessageBox.information(
+            self,
+            "Session cleaned",
+            f"{session_id}: {report.summary_before} → {report.summary_after} points\n"
+            f"Removed {report.removed_foreign_session} foreign row(s), "
+            f"{report.removed_off_path} off-path click(s).\n"
+            f"Backfilled {report.backfilled_waypoint_id} waypoint ID(s).",
+        )
+        self._reload_session()
+
     def _reload_session(self):
         """Switch the floorplan view to match the session name in the sidebar."""
         session_id = self._current_session_id()
         self._clear_session_display()
         try:
             dw = self._data_writer()
-            rows = dw.load_summary_rows()
-            raw_rows = dw.load_raw_rows()
+            foreign = count_foreign_rows(dw.session_dir)
+            if foreign:
+                self._set_status(
+                    "warning",
+                    f"{foreign} row(s) from other sessions — use Clean or fix session name",
+                )
+            rows = load_measurements(dw.summary_path, session_id=session_id)
+            click_ids = {r.get("click_id") for r in rows if r.get("click_id")}
+            raw_rows = [
+                r for r in dw.load_raw_rows()
+                if r.get("session_id") == session_id and r.get("click_id") in click_ids
+            ]
             self._summary_rows = rows
             self._raw_rows = raw_rows
             for row in rows:

@@ -16,8 +16,18 @@ class DataWriter:
         self.raw_path = self.session_dir / "measurements_raw.csv"
         self.summary_path = self.session_dir / "measurements_summary.csv"
 
+    def _check_session_id(self, session_id: str):
+        expected = self.session_dir.name
+        if session_id != expected:
+            raise ValueError(
+                f"session_id '{session_id}' does not match folder '{expected}'. "
+                "Click Load after changing the session name."
+            )
+
     def append_raw(self, samples: List[Sample], click_context: dict = None):
         """Write sample rows to raw CSV, flushing after each write."""
+        if samples:
+            self._check_session_id(samples[0].session_id)
         fh, writer = open_raw_writer(self.raw_path)
         try:
             for s in samples:
@@ -29,6 +39,7 @@ class DataWriter:
 
     def append_summary(self, summary_row: dict):
         """Write one summary row to summary CSV, flushing immediately."""
+        self._check_session_id(summary_row.get("session_id", ""))
         fh, writer = open_summary_writer(self.summary_path)
         try:
             writer.writerow(summary_row)

@@ -90,10 +90,15 @@ class SessionMetrics:
 def load_measurements(summary_csv: Path, session_id: Optional[str] = None) -> List[dict]:
     if not summary_csv.exists():
         return []
+    # Always scope to the session folder name so stray rows from other trials are ignored.
+    if session_id is None and summary_csv.parent.name not in (".", "survey_sessions"):
+        session_id = summary_csv.parent.name
     rows = []
+    skipped_foreign = 0
     with open(summary_csv, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             if session_id and row.get("session_id") != session_id:
+                skipped_foreign += 1
                 continue
             try:
                 row["x_px"] = float(row["x_px"])
@@ -121,6 +126,15 @@ def load_measurements(summary_csv: Path, session_id: Optional[str] = None) -> Li
             except ValueError:
                 continue
             rows.append(row)
+    if skipped_foreign:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Skipped %d summary row(s) in %s with session_id != %s",
+            skipped_foreign,
+            summary_csv,
+            session_id,
+        )
     return rows
 
 
