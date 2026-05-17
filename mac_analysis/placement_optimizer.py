@@ -42,6 +42,8 @@ from shared.survey_metrics import (
 )
 from shared.utils import project_paths
 
+from mac_analysis.floorplan_viz import annotate_placement_heatmap_ax, plot_placement_overview
+
 
 def _load_metadata(path: Path) -> dict:
     if not path.exists():
@@ -128,6 +130,9 @@ def _plot_predicted_coverage(
     image_path: Path,
     output_path: Path,
     title: str,
+    *,
+    routers: list,
+    candidates: list,
 ):
     img = Image.open(image_path).convert("RGB")
     w, h = img.size
@@ -147,6 +152,7 @@ def _plot_predicted_coverage(
     )
     cbar = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.01)
     cbar.set_label("Predicted RSSI (dBm)", fontsize=10)
+    annotate_placement_heatmap_ax(ax, routers, candidates)
     ax.set_title(title, fontsize=13)
     ax.axis("off")
     fig.tight_layout()
@@ -244,6 +250,16 @@ def optimize_placement(
         json.dump(recommendation, f, indent=2)
     print(f"Saved: {output_dir / 'placement_recommendation.json'}")
 
+    overview_path = output_dir / "placement_overview.png"
+    plot_placement_overview(
+        paths["floorplan_png"],
+        routers,
+        ranked,
+        overview_path,
+        title="Trial AP locations (orange) and suggested placements (green #1)",
+    )
+
+    predicted_path = None
     if ranked:
         best = ranked[0]
         grid = _predict_grid(
@@ -257,11 +273,14 @@ def optimize_placement(
             rooms,
             scale,
         )
+        predicted_path = output_dir / "predicted_coverage_rank1.png"
         _plot_predicted_coverage(
             grid,
             paths["floorplan_png"],
-            output_dir / "predicted_coverage_rank1.png",
-            f"Predicted coverage for suggested AP #{best['rank']} ({best['x_px']:.0f}, {best['y_px']:.0f})",
+            predicted_path,
+            f"Predicted coverage if AP is at green #1 ({best['x_px']:.0f}, {best['y_px']:.0f})",
+            routers=routers,
+            candidates=ranked,
         )
 
     print("\nPath-loss model")
@@ -283,7 +302,8 @@ def optimize_placement(
         "artifacts": {
             "model_params_json": output_dir / "model_params.json",
             "placement_recommendation_json": output_dir / "placement_recommendation.json",
-            "predicted_coverage_png": output_dir / "predicted_coverage_rank1.png" if ranked else None,
+            "placement_overview_png": overview_path,
+            "predicted_coverage_png": predicted_path,
         },
     }
 

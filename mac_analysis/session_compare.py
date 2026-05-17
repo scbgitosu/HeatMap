@@ -36,6 +36,7 @@ from mac_analysis.heatmap_generator import (
     _load_rooms,
     _load_routers,
 )
+from mac_analysis.floorplan_viz import draw_trial_routers, plot_router_trial_map
 from mac_analysis.walk_matcher import build_walk_pairs, write_walk_pairs
 from shared.survey_metrics import (
     DEFAULT_GOOD_DBM,
@@ -304,8 +305,10 @@ def plot_coverage_diff(
     )
     cbar = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.01)
     cbar.set_label("Δ RSSI (dBm): best − worst trial", fontsize=10)
+    routers = _load_routers(paths["router_positions_json"])
+    draw_trial_routers(ax, routers, highlight_position_id=best.router_position_id)
     ax.set_title(
-        f"Coverage gain: {best.router_name or best.session_id} vs "
+        f"Coverage gain: {best.router_name or best.session_id} (★ best) vs "
         f"{worst.router_name or worst.session_id}",
         fontsize=12,
     )
@@ -433,8 +436,15 @@ def export_per_session_heatmaps(
         if not measurements:
             continue
         prefix = sm.session_id
-        generate_survey_points(measurements, img_arr, rooms, routers, sub / f"{prefix}_points.png")
-        generate_heatmap(measurements, img_arr, rooms, routers, sub / f"{prefix}_heatmap.png")
+        highlight = sm.router_position_id or None
+        generate_survey_points(
+            measurements, img_arr, rooms, routers, sub / f"{prefix}_points.png",
+            highlight_position_id=highlight,
+        )
+        generate_heatmap(
+            measurements, img_arr, rooms, routers, sub / f"{prefix}_heatmap.png",
+            highlight_position_id=highlight,
+        )
         generate_weak_zones(
             measurements,
             img_arr,
@@ -442,6 +452,7 @@ def export_per_session_heatmaps(
             routers,
             sub / f"{prefix}_weak_zones.png",
             threshold_dbm=weak_dbm,
+            highlight_position_id=highlight,
         )
 
 
@@ -497,6 +508,15 @@ def run_session_comparison(
         rooms,
         artifacts["best_vs_worst_png"],
         good_dbm=good_threshold,
+    )
+
+    routers = _load_routers(paths["router_positions_json"])
+    artifacts["router_trial_map_png"] = output_dir / "comparison_router_trial_map.png"
+    plot_router_trial_map(
+        paths["floorplan_png"],
+        routers,
+        valid_results,
+        artifacts["router_trial_map_png"],
     )
 
     if export_heatmaps:

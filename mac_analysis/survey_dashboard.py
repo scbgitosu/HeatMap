@@ -183,13 +183,51 @@ def _render_comparison(project_dir: Path, session_ids: list[str]):
 
     result = st.session_state.get("last_compare_result")
     if result:
+        paths = project_paths(project_dir)
+        st.subheader("Router locations vs sessions")
+        st.caption(
+            "Orange/blue ★ = labeled AP spots. Each session is one walk with the router "
+            "at the matching star. Re-run comparison to refresh maps after code updates."
+        )
+        artifacts = result["artifacts"]
+        _image_if_exists(
+            artifacts.get("router_trial_map_png"),
+            "Which AP location each session tested (ranked)",
+        )
+
+        routers = _load_json(paths["router_positions_json"], [])
+        if routers:
+            map_rows = []
+            for rp in routers:
+                rid = rp.get("router_position_id", "")
+                name = rp.get("name", rid)
+                match = next(
+                    (r for r in result.get("metrics", []) if r.get("router_position_id") == rid),
+                    None,
+                )
+                map_rows.append({
+                    "AP label": name,
+                    "position_id": rid,
+                    "x_px": rp.get("x_px"),
+                    "y_px": rp.get("y_px"),
+                    "session": match.get("session_id", "—") if match else "—",
+                    "rank": match.get("rank", "—") if match else "—",
+                    "score": match.get("composite_score", "—") if match else "—",
+                })
+            st.dataframe(pd.DataFrame(map_rows), use_container_width=True, hide_index=True)
+
         st.subheader("Ranking")
         st.dataframe(pd.DataFrame(result["metrics"]), use_container_width=True)
-        artifacts = result["artifacts"]
         _image_if_exists(artifacts.get("ranking_png"), "Ranking")
         _image_if_exists(artifacts.get("bars_png"), "Coverage / worst-case / stability")
-        _image_if_exists(artifacts.get("best_vs_worst_png"), "Best vs worst")
+        _image_if_exists(artifacts.get("best_vs_worst_png"), "Best vs worst (★ = best trial AP)")
         _image_if_exists(artifacts.get("walk_deltas_png"), "Matched walk deltas")
+        heat_dir = artifacts.get("heatmaps_dir")
+        if heat_dir and Path(heat_dir).is_dir():
+            st.subheader("Per-session heatmaps")
+            st.caption("Blue ★ = AP used for that session; grey/orange = other labeled candidates.")
+            for png in sorted(Path(heat_dir).glob("*_heatmap.png")):
+                _image_if_exists(png, png.name)
         _dataframe_if_exists(artifacts.get("metrics_csv"))
         _dataframe_if_exists(artifacts.get("walk_pairs_csv"))
 
@@ -258,11 +296,31 @@ def _render_optimizer(project_dir: Path, paths: dict, session_ids: list[str]):
 
     result = st.session_state.get("last_optimizer_result")
     if result:
-        _json_if_exists(result["artifacts"]["model_params_json"])
-        _json_if_exists(result["artifacts"]["placement_recommendation_json"])
-        predicted = result["artifacts"].get("predicted_coverage_png")
+        st.caption(
+            "**Legend:** orange ★ = Hall / Fridge / Original (trials you measured). "
+            "green ★ **#1** = model’s top new spot. purple dots = ranks #2–#5."
+        )
+        artifacts = result["artifacts"]
+        _image_if_exists(
+            artifacts.get("placement_overview_png"),
+            "Trial APs + suggested placements (read this first)",
+        )
+        predicted = artifacts.get("predicted_coverage_png")
         if predicted:
-            _image_if_exists(predicted, "Predicted coverage")
+            _image_if_exists(predicted, "Predicted coverage at green #1 (same markers)")
+
+        rec = result.get("recommendation", {})
+        candidates = rec.get("top_candidates", [])
+        if candidates:
+            st.subheader("Suggested coordinates")
+            cand_df = pd.DataFrame(candidates)[
+                ["rank", "x_px", "y_px", "score", "pct_area_good", "p10_dbm", "mean_dbm"]
+            ]
+            st.dataframe(cand_df, use_container_width=True, hide_index=True)
+
+        with st.expander("Model parameters (JSON)"):
+            _json_if_exists(artifacts.get("model_params_json"))
+            _json_if_exists(artifacts.get("placement_recommendation_json"))
 
 
 def _render_results(project_dir: Path):

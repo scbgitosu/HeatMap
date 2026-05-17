@@ -1,0 +1,57 @@
+{
+  "good_threshold_dbm": -67.0,
+  "candidate_step_px": 80,
+  "receiver_step_px": 80,
+  "top_candidates": [
+    {
+      "x_px": 880.0,
+      "y_px": 400.0,
+      "height_ft": 4.0,
+      "score": 100.0,
+      "pct_area_good": 100.0,
+      "p10_dbm": -46.22874637327782,
+      "mean_dbm": -41.89797879697167,
+      "rank": 1
+    },
+    {
+      "x_px": 960.0,
+      "y_px": 400.0,
+      "height_ft": 4.0,
+      "score": 100.0,
+      "pct_area_good": 100.0,
+      "p10_dbm": -46.29775615748307,
+      "mean_dbm": -41.80046254927356,
+      "rank": 2
+    },
+    {
+      "x_px": 1040.0,
+      "y_px": 400.0,
+      "height_ft": 4.0,
+      "score": 100.0,
+      "pct_area_good": 100.0,
+      "p10_dbm": -46.41706196638192,
+      "mean_dbm": -41.76427834586761,
+      "rank": 3
+    },
+    {
+      "x_px": 1120.0,
+      "y_px": 400.0,
+      "height_ft": 4.0,
+      "score": 100.0,
+      "pct_area_good": 100.0,
+      "p10_dbm": -46.58091592733011,
+      "mean_dbm": -41.78143132288469,
+      "rank": 4
+    },
+    {
+      "x_px": 1200.0,
+      "y_px": 400.0,
+      "height_ft": 4.0,
+      "score": 100.0,
+      "pct_area_good": 100.0,
+      "p10_dbm": -46.747931124414386,
+      "mean_dbm": -39.80843406031241,
+      "rank": 5
+    }
+  ]
+}

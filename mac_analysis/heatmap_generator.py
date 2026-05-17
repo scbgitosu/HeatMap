@@ -103,12 +103,10 @@ def _draw_room_outlines(ax, rooms: list):
         ax.add_collection(pc)
 
 
-def _draw_router_markers(ax, routers: list):
-    for rp in routers:
-        ax.plot(rp["x_px"], rp["y_px"], marker="*", markersize=16,
-                color="orange", markeredgecolor="black", zorder=20)
-        ax.text(rp["x_px"] + 8, rp["y_px"] - 8, rp.get("name", ""),
-                fontsize=8, color="darkorange", zorder=21)
+def _draw_router_markers(ax, routers: list, highlight_position_id: Optional[str] = None):
+    from mac_analysis.floorplan_viz import draw_trial_routers
+
+    draw_trial_routers(ax, routers, highlight_position_id=highlight_position_id)
 
 
 def generate_survey_points(
@@ -117,6 +115,7 @@ def generate_survey_points(
     rooms: list,
     routers: list,
     output_path: Path,
+    highlight_position_id: Optional[str] = None,
 ):
     fig, ax = plt.subplots(figsize=(12, 9))
     _draw_floorplan_base(ax, img_arr)
@@ -132,7 +131,7 @@ def generate_survey_points(
         cbar = fig.colorbar(sc, ax=ax, fraction=0.03, pad=0.01)
         cbar.set_label("RSSI (dBm)", fontsize=10)
 
-    _draw_router_markers(ax, routers)
+    _draw_router_markers(ax, routers, highlight_position_id=highlight_position_id)
     ax.set_title("Survey measurement points", fontsize=13)
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -147,6 +146,7 @@ def generate_heatmap(
     routers: list,
     output_path: Path,
     downsample: int = 4,
+    highlight_position_id: Optional[str] = None,
 ):
     h, w = img_arr.shape[:2]
     gw, gh = w // downsample, h // downsample
@@ -195,7 +195,7 @@ def generate_heatmap(
     cbar = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.01)
     cbar.set_label("RSSI (dBm)", fontsize=10)
 
-    _draw_router_markers(ax, routers)
+    _draw_router_markers(ax, routers, highlight_position_id=highlight_position_id)
     ax.set_title("Wi-Fi RSSI Heatmap", fontsize=13)
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -211,6 +211,7 @@ def generate_weak_zones(
     output_path: Path,
     threshold_dbm: float = -70.0,
     downsample: int = 4,
+    highlight_position_id: Optional[str] = None,
 ):
     h, w = img_arr.shape[:2]
     gw, gh = w // downsample, h // downsample
@@ -261,7 +262,7 @@ def generate_weak_zones(
     cbar = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.01)
     cbar.set_label(f"RSSI < {threshold_dbm} dBm (Weak zones)", fontsize=10)
 
-    _draw_router_markers(ax, routers)
+    _draw_router_markers(ax, routers, highlight_position_id=highlight_position_id)
     ax.set_title(f"Weak signal zones (below {threshold_dbm} dBm)", fontsize=13)
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -345,8 +346,18 @@ def run_heatmap_generation(
         "heatmap": output_dir / f"{session_id}_heatmap.png",
         "weak_zones": output_dir / f"{session_id}_weak_zones.png",
     }
-    generate_survey_points(measurements, img_arr, rooms, routers, outputs["points"])
-    generate_heatmap(measurements, img_arr, rooms, routers, outputs["heatmap"])
+    highlight = None
+    if measurements:
+        highlight = measurements[0].get("router_position_id") or None
+
+    generate_survey_points(
+        measurements, img_arr, rooms, routers, outputs["points"],
+        highlight_position_id=highlight,
+    )
+    generate_heatmap(
+        measurements, img_arr, rooms, routers, outputs["heatmap"],
+        highlight_position_id=highlight,
+    )
     generate_weak_zones(
         measurements,
         img_arr,
@@ -354,6 +365,7 @@ def run_heatmap_generation(
         routers,
         outputs["weak_zones"],
         threshold_dbm=weak_threshold,
+        highlight_position_id=highlight,
     )
     return {
         "session_id": session_id,

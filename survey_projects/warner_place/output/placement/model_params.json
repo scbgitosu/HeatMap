@@ -1,0 +1,9 @@
+{
+  "p0_dbm": -13.31477390508797,
+  "path_loss_exponent_n": 1.526402564675899,
+  "cross_room_penalty_db": 11.439634754420966,
+  "rmse_db": 6.180908544084015,
+  "leave_one_session_out_rmse_db": 6.6999111786994945,
+  "sample_count": 75,
+  "scale_pixels_per_foot": 45.29909476774188
+}
